@@ -37,7 +37,7 @@ from src.output import (
     success,
     warn,
 )
-from src.verify import compare_versions, extract_version_from_filename
+from src.verify import compare_versions, extract_version_from_filename, parse_version
 
 DEBUG = os.environ.get("VISYNC_DEBUG", "0") == "1"
 
@@ -86,7 +86,6 @@ def fetch_html(url: str, allow_insecure: bool = False) -> str:
             if "Anubis" in html[:1000]:
                 warn("Mirror protected by bot challenge (Anubis). Cannot scrape automatically.")
                 warn("Visit the URL in a browser, complete the challenge, then re-run.")
-                return ""
                 return ""
             return html
     except urllib.error.URLError as e:
@@ -526,7 +525,7 @@ def download_iso(
         else:
             warn(f"No checksum config for {dest_path.name} — skipping verification")
 
-    _cleanup_old_versions(dest_path)
+    _cleanup_old_versions(dest_path, drive_root)
 
     if drive_root and sha256_hex:
         volume_id = get_iso_volume_id(dest_path)
@@ -546,7 +545,7 @@ def download_iso(
     return True
 
 
-def _cleanup_old_versions(new_iso: Path) -> None:
+def _cleanup_old_versions(new_iso: Path, drive_root: Path | None = None) -> None:
     """Scan the target directory and delete older ISOs of the same distribution variant.
 
     Uses volume ID to match distros, and extracts a variant stem to avoid
@@ -588,7 +587,8 @@ def _cleanup_old_versions(new_iso: Path) -> None:
                 if old_distro == new_distro and old_stem == new_stem:
                     removed(f"Removing deprecated image: {iso_path.name}")
                     iso_path.unlink(missing_ok=True)
-                    remove_iso_metadata(new_iso.parent, iso_path.name)
+                    if drive_root:
+                        remove_iso_metadata(drive_root, iso_path.name)
             except OSError:
                 warn(f"Could not remove stale file: {iso_path.name}")
             except Exception:
@@ -705,19 +705,18 @@ def _check_distro(entry_id: str, settings: dict, ventoy_root: Path, force: bool 
         return entry_id, clean_name, "", False, None
 
     if not force:
-        local_candidates = [
+        remote_stem = latest_filename.split("-")[0].lower()
+        same_distro = [
             f for f in local_ventoy_files
-            if extract_version_from_filename(f.name)
+            if f.name.lower().startswith(remote_stem)
+            and extract_version_from_filename(f.name)
         ]
-        if local_candidates:
-            remote_stem = latest_filename.split("-")[0].lower()
-            same_distro = [
-                f for f in local_candidates
-                if f.name.lower().startswith(remote_stem)
-            ]
-            best_local = same_distro[0] if same_distro else local_candidates[0]
+        if same_distro:
+            best_local = max(
+                same_distro,
+                key=lambda f: parse_version(extract_version_from_filename(f.name)) or (0,),
+            )
             local_version = extract_version_from_filename(best_local.name)
-
             comparison = compare_versions(remote_version, local_version)
             if comparison <= 0:
                 success(
@@ -786,7 +785,7 @@ def sync_all_configured_distros(
         download_target_dir = ventoy_root
         info(f"Direct volume mode → {download_target_dir}")
 
-    pending_downloads: list[tuple[str, str]] = []
+    pending_downloads: list[tuple[str, str, str]] = []
     scrape_start = __import__("time").monotonic()
 
     if only:
@@ -862,7 +861,7 @@ def sync_all_configured_distros(
                         drive_dest.unlink(missing_ok=True)
                         continue
                     success(f"Copied {latest_filename} to Ventoy drive")
-                    _cleanup_old_versions(drive_dest)
+                    _cleanup_old_versions(drive_dest, ventoy_root)
                 except OSError as e:
                     error(f"Failed copying {latest_filename} to drive: {e}")
                     drive_dest.unlink(missing_ok=True)

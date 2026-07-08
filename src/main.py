@@ -282,6 +282,21 @@ def update(
         use_buffer=not no_staging,
     )
 
+    if not dry_run:
+        from src.pm import mark_installed as _mark_installed
+        from src.verify import extract_version_from_filename as _extract_ver
+        existing = find_installed_isos(ventoy_root)
+        for eid in only:
+            distro_config = config_data.get("distros", {}).get(eid, {})
+            clean_name = distro_config.get("clean_name", eid)
+            for iso_path in existing:
+                vid = get_iso_volume_id(iso_path)
+                distro = identify_distro(vid, iso_path.name) if vid else identify_distro("", iso_path.name)
+                if distro.lower() == clean_name.lower():
+                    version = _extract_ver(iso_path.name) or ""
+                    _mark_installed(ventoy_root, eid, version=version)
+                    break
+
 
 @app.command()
 def search(
