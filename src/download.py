@@ -747,14 +747,14 @@ def sync_all_configured_distros(
     config_path: Path | None = None,
     only: list[str] | None = None,
     drive_override: Path | None = None,
-    use_buffer: bool | None = None,
+    use_buffer: bool = True,
     no_verify: bool = False,
 ):
     """Iterate through user-defined scrapers to pull updates down safely.
 
     If *only* is provided, only sync those entry_ids.
     If *drive_override* is provided, use that as the Ventoy root.
-    If *use_buffer* is None, check sys.argv for --no-buffer.
+    Set *use_buffer* to False to download directly to the Ventoy drive.
     """
     _debug(f"sync_all_configured_distros(dry_run={dry_run}, force={force}, clean={clean}, only={only})")
     config = load_config(config_path)
@@ -764,9 +764,6 @@ def sync_all_configured_distros(
     if not distro_scrapers:
         error("No distribution definitions configured inside [distros] block.")
         return
-
-    if use_buffer is None:
-        use_buffer = "--no-buffer" not in sys.argv
 
     if drive_override:
         ventoy_root = drive_override

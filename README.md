@@ -56,10 +56,10 @@ visync verify
 | `visync install <name>` | Download and register a distro |
 | `visync install -i <file>` | Batch install from file (one name per line) |
 | `visync remove <name>` | Delete from drive and unregister |
-| `visync update [name]` | Update installed distros (all if no name given) |
-| `visync sync` | Sync installed distros to latest |
-| `visync sync --all` | Sync all configured distros |
-| `visync sync --clean` | Remove old versions of same distro |
+| `visync update [name]` [--no-staging] | Update installed distros (all if no name given) |
+| `visync sync` [--no-staging] | Sync installed distros to latest |
+| `visync sync --all` [--no-staging] | Sync all configured distros |
+| `visync sync --clean` [--no-staging] | Remove old versions of same distro |
 | `visync list` | List ISOs on the drive |
 | `visync autodetect` | Register existing ISOs as installed |
 | `visync verify` | Verify checksums against upstream |
@@ -108,7 +108,7 @@ Edit `config.toml` to add or remove distros. Each distro entry defines a scrapin
 1. **Detect** — finds mounted Ventoy drives on Windows, macOS, or Linux (with udisksctl automount)
 2. **Scrape** — concurrent mirror scraping with TCP pre-flight checks and watchdog timeouts
 3. **Compare** — version-aware comparison (semantic or date-based) against local ISOs
-4. **Download** — streaming downloads with staging buffer (less drive wear), falls back to direct if staging full
+4. **Download** — streaming downloads with staging buffer (less drive wear), falls back to direct if staging full. Use `--no-staging` / `--no-buffer` to skip the staging buffer and download directly to the Ventoy drive.
 5. **Verify** — optional checksum verification against published hashes
 6. **Clean** — `--clean` removes deprecated ISOs of the same distro variant (dry-run by default)
 7. **State** — tracks installed distros in `.visync/installed.json`

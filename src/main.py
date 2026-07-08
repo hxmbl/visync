@@ -50,6 +50,9 @@ def install(
     no_verify: bool = typer.Option(
         False, "--no-verify", help="Skip checksum verification after download"
     ),
+    no_staging: bool = typer.Option(
+        False, "--no-staging", "--no-buffer", help="Download directly to the Ventoy drive (skip staging buffer)"
+    ),
 ) -> None:
     """Download and install distros to the Ventoy drive.
 
@@ -100,6 +103,9 @@ def install(
         usage = _shutil.disk_usage(staging_dir.parent)
         use_buffer = usage.free > 512 * 1024 * 1024
     except Exception:
+        use_buffer = False
+
+    if no_staging:
         use_buffer = False
 
     existing = find_installed_isos(ventoy_root)
@@ -242,6 +248,9 @@ def update(
     no_verify: bool = typer.Option(
         False, "--no-verify", help="Skip checksum verification after download"
     ),
+    no_staging: bool = typer.Option(
+        False, "--no-staging", "--no-buffer", help="Download directly to the Ventoy drive (skip staging buffer)"
+    ),
 ) -> None:
     """Update installed distros to latest versions."""
     from src.download import sync_all_configured_distros
@@ -270,6 +279,7 @@ def update(
         only=only,
         drive_override=ventoy_root,
         no_verify=no_verify,
+        use_buffer=not no_staging,
     )
 
 
@@ -526,6 +536,9 @@ def sync(
     no_verify: bool = typer.Option(
         False, "--no-verify", help="Skip checksum verification after download"
     ),
+    no_staging: bool = typer.Option(
+        False, "--no-staging", "--no-buffer", help="Download directly to the Ventoy drive (skip staging buffer)"
+    ),
 ) -> None:
     """Sync installed distros to the Ventoy drive."""
     from src.download import sync_all_configured_distros
@@ -549,6 +562,7 @@ def sync(
         only=only,
         drive_override=drive_root,
         no_verify=no_verify,
+        use_buffer=not no_staging,
     )
 
 
