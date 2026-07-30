@@ -6,11 +6,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import typer
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from typer.testing import CliRunner
 
-from src.main import app
+from src.main import app, _get_drive
 
 runner = CliRunner()
 
@@ -590,6 +591,77 @@ class TestShortFlags(unittest.TestCase):
         for cmd in ["install", "sync", "update"]:
             opts = self._get_options(cmd)
             self.assertIn("--no-verify", opts, f"{cmd} missing --no-verify")
+
+
+# ── multi-drive support ─────────────────────────────────────────────────────
+
+
+class TestGetDrive(unittest.TestCase):
+    """Tests for _get_drive() multi-drive selection logic."""
+
+    def test_single_drive_returns_it(self) -> None:
+        """With one detected drive, returns it without prompting."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("src.main.find_ventoy_drives", return_value=[Path(tmpdir)]):
+                result = _get_drive()
+                self.assertEqual(result, Path(tmpdir))
+
+    def test_explicit_drive_flag_bypasses_detection(self) -> None:
+        """When --drive is provided, detection is skipped entirely."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = _get_drive(drive=Path(tmpdir))
+            self.assertEqual(result, Path(tmpdir))
+
+    def test_explicit_drive_flag_invalid_path_fails(self) -> None:
+        """When --drive points to a non-existent path, exits with error."""
+        with self.assertRaises(typer.Exit):
+            _get_drive(drive=Path("/nonexistent/path"))
+
+    @patch("src.main.find_ventoy_drives")
+    def test_multiple_drives_prompts_user(self, mock_drives: MagicMock) -> None:
+        """With multiple drives, prompts user to select."""
+        with tempfile.TemporaryDirectory() as d1, \
+             tempfile.TemporaryDirectory() as d2:
+            mock_drives.return_value = [Path(d1), Path(d2)]
+            # Simulate user entering "1"
+            with patch("src.main.typer.prompt", return_value=1):
+                result = _get_drive()
+                self.assertEqual(result, Path(d1))
+
+    @patch("src.main.find_ventoy_drives")
+    def test_multiple_drives_second_choice(self, mock_drives: MagicMock) -> None:
+        """With multiple drives, user can select the second one."""
+        with tempfile.TemporaryDirectory() as d1, \
+             tempfile.TemporaryDirectory() as d2:
+            mock_drives.return_value = [Path(d1), Path(d2)]
+            with patch("src.main.typer.prompt", return_value=2):
+                result = _get_drive()
+                self.assertEqual(result, Path(d2))
+
+    @patch("src.main.find_ventoy_drives")
+    def test_multiple_drives_retries_on_invalid(self, mock_drives: MagicMock) -> None:
+        """Invalid selection retries prompt until valid."""
+        with tempfile.TemporaryDirectory() as d1, \
+             tempfile.TemporaryDirectory() as d2:
+            mock_drives.return_value = [Path(d1), Path(d2)]
+            # First call returns invalid (0), second returns valid (1)
+            with patch("src.main.typer.prompt", side_effect=[0, 1]):
+                result = _get_drive()
+                self.assertEqual(result, Path(d1))
+
+    @patch("src.main.find_ventoy_drives")
+    def test_multiple_drives_abort_exits(self, mock_drives: MagicMock) -> None:
+        """User abort (Ctrl+C) during prompt exits cleanly."""
+        mock_drives.return_value = [Path("/tmp/a"), Path("/tmp/b")]
+        with patch("src.main.typer.prompt", side_effect=typer.Abort()):
+            with self.assertRaises(typer.Exit):
+                _get_drive()
+
+    def test_no_drives_exits(self) -> None:
+        """No drives detected exits with error."""
+        with patch("src.main.find_ventoy_drives", return_value=[]):
+            with self.assertRaises(typer.Exit):
+                _get_drive()
 
 
 if __name__ == "__main__":

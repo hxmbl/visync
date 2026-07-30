@@ -210,12 +210,6 @@ def find_ventoy_drives() -> list[Path]:
             f"Unsupported operating system: {system}\nThis script currently supports Windows, macOS, and Linux.\nTo add support for your OS, please contribute to github.com/hxmbl/visync"
         )
 
-    if len(detected_paths) > 1:
-        warn(
-            f"Multiple Ventoy drives detected. Defaulting to: {detected_paths[0]}"
-        )
-        console.print(f"    [dim]Ignored: {[str(p) for p in detected_paths[1:]]}[/dim]")
-
     return detected_paths
 
 

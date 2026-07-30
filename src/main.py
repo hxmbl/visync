@@ -22,14 +22,41 @@ app = typer.Typer()
 
 
 def _get_drive(drive: Path | None = None) -> Path:
-    """Resolve the Ventoy drive path."""
+    """Resolve the Ventoy drive path.
+
+    If *drive* is provided, use it directly.
+    If exactly one drive is detected, use it.
+    If multiple drives are detected, prompt the user to choose.
+    """
     if drive is not None:
+        if not drive.is_dir():
+            error(f"Not a directory: {drive}")
+            raise typer.Exit(1)
         return drive
+
     drives = find_ventoy_drives()
     if not drives:
         error("No Ventoy drives detected.")
         raise typer.Exit(1)
-    return drives[0]
+
+    if len(drives) == 1:
+        return drives[0]
+
+    # Multiple drives — prompt user to choose
+    console.print()
+    console.print("  [bold]Multiple Ventoy drives detected:[/bold]")
+    for i, d in enumerate(drives, 1):
+        console.print(f"    [cyan]{i}[/cyan]) {d}")
+    console.print()
+
+    while True:
+        try:
+            choice = typer.prompt("Select drive number", type=int)
+        except (typer.Abort, EOFError):
+            raise typer.Exit(1)
+        if 1 <= choice <= len(drives):
+            return drives[choice - 1]
+        error(f"Invalid choice. Enter a number between 1 and {len(drives)}.")
 
 
 @app.command()
@@ -489,18 +516,7 @@ def list(
     """List ISOs on the Ventoy drive with distro, version, and size."""
     from src.pm import get_installed_ids
 
-    if drive is not None:
-        iso_dir = drive
-    else:
-        drives = find_ventoy_drives()
-        if not drives:
-            error("No Ventoy drives detected.")
-            raise typer.Exit(1)
-        iso_dir = drives[0]
-
-    if not iso_dir.is_dir():
-        error(f"Not a directory: {iso_dir}")
-        raise typer.Exit(1)
+    iso_dir = _get_drive(drive)
 
     iso_paths = find_installed_isos(iso_dir)
     if not iso_paths:
@@ -595,18 +611,7 @@ def verify(
 ) -> None:
     """Verify integrity of ISOs on the Ventoy drive."""
     config_data = load_config(config)
-    if drive is not None:
-        iso_dir = drive
-    else:
-        drives = find_ventoy_drives()
-        if not drives:
-            error("No Ventoy drives detected.")
-            raise typer.Exit(1)
-        iso_dir = drives[0]
-
-    if not iso_dir.is_dir():
-        error(f"Not a directory: {iso_dir}")
-        raise typer.Exit(1)
+    iso_dir = _get_drive(drive)
 
     output_info(f"Verifying ISOs in {iso_dir} ...")
     results = run_directory_verify(iso_dir, config_data)

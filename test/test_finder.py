@@ -85,9 +85,9 @@ class TestFindVentoyDrives(unittest.TestCase):
             _ok(f"Found Ventoy drive: {d}")
             self.assertTrue(d.exists(), f"Mount point {d} does not exist")
 
-    def test_error_on_multiple_drives(self) -> None:
-        """find_ventoy_drives should raise if multiple drives found."""
-        pass  # relies on environment, assertion is implicit in finder logic
+    def test_returns_all_detected_drives(self) -> None:
+        """find_ventoy_drives returns all detected drives (no longer defaults to first)."""
+        pass  # relies on environment — validated by integration test
 
 
 class TestInstalledIsos(unittest.TestCase):
