@@ -498,6 +498,7 @@ def download_iso(
     # Compute SHA-256 once — used for both verification and metadata
     sha256_hex = ""
     try:
+        spin_update(f"Hashing {dest_path.name}...")
         h = hashlib.sha256()
         with open(dest_path, "rb") as f:
             while True:
@@ -548,10 +549,9 @@ def download_iso(
 def _cleanup_old_versions(new_iso: Path, drive_root: Path | None = None) -> None:
     """Scan the target directory and delete older ISOs of the same distribution variant.
 
-    Uses volume ID to match distros, and extracts a variant stem to avoid
-    deleting different flavors (e.g. Fedora KDE vs Fedora Sway).
-    Falls back to filename-based matching for .img files (no ISO 9660 header).
-    Safe to call — deletion failures are logged but never crash the program.
+    Uses volume ID for the new file only, then uses filename-based matching
+    to find candidates. Only reads volume IDs for filename-matched candidates
+    to confirm they are the same distro+variant before deletion.
     """
     _debug(f"Cleanup check for {new_iso.name}")
     try:
@@ -560,22 +560,27 @@ def _cleanup_old_versions(new_iso: Path, drive_root: Path | None = None) -> None
             new_distro = identify_distro(new_vid, new_iso.name)
             new_stem = _variant_stem(new_vid)
         else:
-            # Filename-based fallback for .img files or unreadable ISOs
             new_distro = identify_distro("", new_iso.name)
             new_stem = new_iso.name.rsplit("-", 1)[0].lower() if "-" in new_iso.name else ""
 
-        # Skip unknown or generic matches — don't delete anything we can't positively identify
         if new_distro in ("Unknown OS", ""):
             return
 
         target_dir = new_iso.parent
-        all_isos = find_installed_isos(target_dir)
+        new_stem_lower = new_stem.lower()
 
-        for iso_path in all_isos:
+        for iso_path in find_installed_isos(target_dir):
             if iso_path == new_iso:
                 continue
 
             try:
+                # Quick filename-based filter: same distro prefix
+                old_name_lower = iso_path.name.lower()
+                # Check if filename starts with the same stem prefix
+                if new_stem_lower and not old_name_lower.startswith(new_stem_lower.split("-")[0]):
+                    continue
+
+                # Confirm match by reading volume ID only for candidates
                 old_vid = get_iso_volume_id(iso_path)
                 if old_vid:
                     old_distro = identify_distro(old_vid, iso_path.name)
@@ -748,7 +753,7 @@ def sync_all_configured_distros(
     drive_override: Path | None = None,
     use_buffer: bool = True,
     no_verify: bool = False,
-):
+) -> tuple[Path | None, list[str]]:
     """Iterate through user-defined scrapers to pull updates down safely.
 
     If *only* is provided, only sync those entry_ids.
@@ -820,6 +825,8 @@ def sync_all_configured_distros(
 
     checksums_config = config.get("checksums", {})
 
+    downloaded: list[str] = []
+
     if dry_run:
         if not pending_downloads:
             info("All ISOs are current — nothing to download.")
@@ -848,26 +855,31 @@ def sync_all_configured_distros(
             if not ok:
                 part_file.unlink(missing_ok=True)
                 continue
+            downloaded.append(latest_filename)
             if dest.parent != ventoy_root:
                 drive_dest = ventoy_root / latest_filename
                 try:
-                    shutil.copy2(dest, drive_dest)
-                    # Verify the copy is the same size as the source
-                    if drive_dest.stat().st_size != dest.stat().st_size:
-                        error(
-                            f"Copy verification failed for {latest_filename} — "
-                            f"source {dest.stat().st_size}, dest {drive_dest.stat().st_size}"
-                        )
-                        drive_dest.unlink(missing_ok=True)
-                        continue
-                    success(f"Copied {latest_filename} to Ventoy drive")
+                    try:
+                        shutil.move(str(dest), str(drive_dest))
+                        success(f"Moved {latest_filename} to Ventoy drive")
+                    except OSError:
+                        shutil.copy2(str(dest), str(drive_dest))
+                        if drive_dest.stat().st_size != dest.stat().st_size:
+                            error(
+                                f"Copy verification failed for {latest_filename} — "
+                                f"source {dest.stat().st_size}, dest {drive_dest.stat().st_size}"
+                            )
+                            drive_dest.unlink(missing_ok=True)
+                            continue
+                        dest.unlink(missing_ok=True)
+                        success(f"Copied {latest_filename} to Ventoy drive")
                     _cleanup_old_versions(drive_dest, ventoy_root)
                 except OSError as e:
-                    error(f"Failed copying {latest_filename} to drive: {e}")
+                    error(f"Failed placing {latest_filename} on drive: {e}")
                     drive_dest.unlink(missing_ok=True)
                     continue
 
-    return download_target_dir
+    return download_target_dir, downloaded
 
 
 if __name__ == "__main__":
