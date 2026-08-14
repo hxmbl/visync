@@ -310,6 +310,7 @@ def write_iso_metadata(
     variant_stem: str,
     version: str,
     sha256: str,
+    size: int = 0,
 ) -> None:
     """Write a JSON metadata manifest for a successfully synced ISO."""
     metadata_dir = ensure_visync_dir(drive_root)
@@ -318,6 +319,7 @@ def write_iso_metadata(
         "variant_stem": variant_stem,
         "version": version,
         "sha256": sha256,
+        "size": size,
         "sync_timestamp": datetime.now(timezone.utc).isoformat(),
     }
     try:

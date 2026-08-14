@@ -16,7 +16,12 @@ from pathlib import Path
 from typing import Optional
 from urllib.request import urlopen
 
-from src.finder import find_installed_isos, get_iso_volume_id, identify_distro
+from src.finder import (
+    find_installed_isos,
+    get_iso_volume_id,
+    identify_distro,
+    load_all_metadata,
+)
 
 
 # ── Version comparison utilities ──────────────────────────────────
@@ -198,10 +203,14 @@ def verify_iso(
     algo: str = "sha256",
     checksum_format: str = "sha256sums",
     signing_key_url: Optional[str] = None,
+    precomputed_hash: str = "",
 ) -> bool:
     """Fetch a checksum, optionally verify its GPG signature, then compare.
 
     Returns True if the local ISO hash matches the published checksum.
+    If *precomputed_hash* is supplied and the requested algo is sha256, it is
+    compared directly instead of re-reading the ISO from disk — avoids the
+    duplicate full-file hash right after a download.
     """
     iso_name = iso_path.name
 
@@ -229,7 +238,10 @@ def verify_iso(
     if not expected:
         return False
 
-    local = compute_iso_hash(iso_path, algo)
+    if precomputed_hash and algo == "sha256":
+        local = precomputed_hash
+    else:
+        local = compute_iso_hash(iso_path, algo)
     return local == expected
 
 
@@ -321,6 +333,27 @@ def build_iso_distro_map(iso_dir: Path) -> dict[str, tuple[Path, str]]:
     return distro_map
 
 
+def _cached_hash_for(iso_path: Path, cached: dict[str, dict]) -> str:
+    """Return the metadata SHA-256 for an ISO only if the on-disk size matches.
+
+    Lets `visync verify` skip re-reading large ISOs from slow drives while still
+    catching files that were replaced or truncated after download. Old metadata
+    without a recorded size (or a size mismatch) falls back to hashing the file.
+    """
+    meta = cached.get(iso_path.name)
+    if not meta:
+        return ""
+    sha = meta.get("sha256", "")
+    if not sha:
+        return ""
+    try:
+        if meta.get("size") == iso_path.stat().st_size:
+            return sha
+    except OSError:
+        pass
+    return ""
+
+
 def run_directory_verify(
     iso_dir: Path, config: dict
 ) -> list[tuple[Path, str, Optional[bool]]]:
@@ -328,10 +361,17 @@ def run_directory_verify(
     distro_map = build_iso_distro_map(iso_dir)
     distro_configs = index_distro_configs(config)
     checksums_config = config.get("checksums", {})
+    cached = load_all_metadata(iso_dir)
     results: list[tuple[Path, str, Optional[bool]]] = []
     for iso_path, distro_name in distro_map.values():
         settings = resolve_distro_settings(distro_name, iso_path.name, distro_configs)
-        result = verify_from_config(iso_path, distro_name, settings, checksums_config)
+        result = verify_from_config(
+            iso_path,
+            distro_name,
+            settings,
+            checksums_config,
+            precomputed_hash=_cached_hash_for(iso_path, cached),
+        )
         results.append((iso_path, distro_name, result))
     return results
 
@@ -377,6 +417,7 @@ def verify_from_config(
         algo=algo,
         checksum_format=fmt,
         signing_key_url=key_url,
+        precomputed_hash=precomputed_hash,
     )
 
 

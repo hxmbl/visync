@@ -497,34 +497,38 @@ def download_iso(
 
     # Compute SHA-256 once — used for both verification and metadata
     sha256_hex = ""
+    spin_start(f"Hashing {dest_path.name}...")
     try:
-        spin_update(f"Hashing {dest_path.name}...")
-        h = hashlib.sha256()
-        with open(dest_path, "rb") as f:
-            while True:
-                chunk = f.read(65536)
-                if not chunk:
-                    break
-                h.update(chunk)
-        sha256_hex = h.hexdigest()
-    except OSError:
-        pass
+        try:
+            h = hashlib.sha256()
+            with open(dest_path, "rb") as f:
+                while True:
+                    chunk = f.read(65536)
+                    if not chunk:
+                        break
+                    h.update(chunk)
+            sha256_hex = h.hexdigest()
+        except OSError:
+            pass
 
-    # Auto-verify checksum if config is available
-    if not no_verify and distro_config and checksums_config is not None:
-        from src.verify import verify_from_config
-        result = verify_from_config(
-            dest_path, "", distro_config, checksums_config,
-            precomputed_hash=sha256_hex,
-        )
-        if result is False:
-            error(f"Checksum verification failed for {dest_path.name} — deleting")
-            dest_path.unlink(missing_ok=True)
-            return False
-        elif result is True:
-            success(f"Checksum verified: {dest_path.name}")
-        else:
-            warn(f"No checksum config for {dest_path.name} — skipping verification")
+        # Auto-verify checksum if config is available
+        if not no_verify and distro_config and checksums_config is not None:
+            from src.verify import verify_from_config
+            spin_update(f"Verifying checksum for {dest_path.name}...")
+            result = verify_from_config(
+                dest_path, "", distro_config, checksums_config,
+                precomputed_hash=sha256_hex,
+            )
+            if result is False:
+                error(f"Checksum verification failed for {dest_path.name} — deleting")
+                dest_path.unlink(missing_ok=True)
+                return False
+            elif result is True:
+                success(f"Checksum verified: {dest_path.name}")
+            else:
+                warn(f"No checksum config for {dest_path.name} — skipping verification")
+    finally:
+        spin_stop()
 
     _cleanup_old_versions(dest_path, drive_root)
 
@@ -534,12 +538,17 @@ def download_iso(
         if volume_id:
             version = extract_version_from_filename(dest_path.name)
         variant_stem = _variant_stem(volume_id) if volume_id else ""
+        try:
+            iso_size = dest_path.stat().st_size
+        except OSError:
+            iso_size = 0
         write_iso_metadata(
             drive_root=drive_root,
             filename=dest_path.name,
             variant_stem=variant_stem,
             version=version,
             sha256=sha256_hex,
+            size=iso_size,
         )
         _debug(f"Metadata written for {dest_path.name}")
 
@@ -735,6 +744,27 @@ def _check_distro(entry_id: str, settings: dict, ventoy_root: Path, force: bool 
     return entry_id, clean_name, latest_filename, False, download_url
 
 
+def _copy_with_progress(src: Path, dst: Path, filename: str) -> None:
+    """Copy a file with a live progress bar.
+
+    Used when moving an ISO from the staging buffer onto the Ventoy drive
+    (different filesystems), where shutil.move would silently copy the whole
+    file and look like a hard freeze.
+    """
+    total = src.stat().st_size
+    with make_download_progress() as progress:
+        task = progress.add_task("copy", filename=filename, total=total or None)
+        copied = 0
+        with open(src, "rb") as rf, open(dst, "wb") as wf:
+            while True:
+                chunk = rf.read(1024 * 1024)
+                if not chunk:
+                    break
+                wf.write(chunk)
+                copied += len(chunk)
+                progress.update(task, completed=copied)
+
+
 def _cleanup_part_files(*directories: Path) -> None:
     """Delete any leftover .part files from the given directories."""
     for directory in directories:
@@ -860,10 +890,10 @@ def sync_all_configured_distros(
                 drive_dest = ventoy_root / latest_filename
                 try:
                     try:
-                        shutil.move(str(dest), str(drive_dest))
+                        dest.rename(drive_dest)
                         success(f"Moved {latest_filename} to Ventoy drive")
                     except OSError:
-                        shutil.copy2(str(dest), str(drive_dest))
+                        _copy_with_progress(dest, drive_dest, latest_filename)
                         if drive_dest.stat().st_size != dest.stat().st_size:
                             error(
                                 f"Copy verification failed for {latest_filename} — "
