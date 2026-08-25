@@ -57,12 +57,22 @@ ubuntu-server = "Ubuntu Server"
 clean_name = "Fedora"
 keyword = "fedora"
 strategy = "fedora_nested"
-base_url = "https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/"
-version_regex = 'href="([0-9\.]+)/"'
-iso_regex = 'href="(Fedora-Workstation-Live-x86_64-[0-9\.-]+\.iso)"'
+# dl.fedoraproject.org serves an Anubis bot challenge to scrapers; kernel.org
+# mirrors the same tree bot-free. Integrity is pinned via signing_key_fingerprint.
+base_url = "https://mirrors.kernel.org/fedora/releases/"
+version_regex = 'href="([0-9]+)\s*/"'
+iso_regex = 'href="(Fedora-Workstation-Live-(?:x86_64-[0-9][0-9.\-]*\.iso|[0-9][0-9.\-]*\.x86_64\.iso))"'
 checksum_url = "{base_url}{version}/{variant_dir}/{arch}/iso/{checksum_stem}-CHECKSUM"
 checksum_format = "gpg_checksum"
 signing_key_url = "https://fedoraproject.org/fedora.gpg"
+# Release-signing keys from https://fedoraproject.org/fedora.gpg (refresh when
+# Fedora publishes new keys). Matches VALIDSIG fingerprints via --status-fd.
+signing_key_fingerprint = [
+    "C6E7F081CF80E13146676E88829B606631645531",
+    "36F612DCF27F7D1A48A835E4DBFCF71C6D9F90A6",
+    "4F50A6114CD5C6976A7F1179655A4B02F577861E",
+    "D924B10D3E810DABDD8B56B596E7E91491211FCE",
+]
 
 [distros.ArchLinux]
 clean_name = "Arch Linux"
@@ -93,20 +103,28 @@ checksum_algo = "sha256"
 clean_name = "Fedora ARM"
 keyword = "fedora-arm"
 strategy = "fedora_nested"
-base_url = "https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/"
-version_regex = 'href="([0-9\.]+)/"'
-# Fedora lists aarch64 images under its standard variant subtrees
-iso_regex = 'href="(Fedora-Workstation-Live-aarch64-[0-9\.-]+\.iso)"'
-# checksum_url: needs version — same pattern as Fedora x86_64
-# checksum_format = "gpg_checksum"
-# signing_key_url = "https://fedoraproject.org/fedora.gpg"
+# dl.fedoraproject.org serves an Anubis bot challenge to scrapers; kernel.org
+# mirrors the same tree bot-free. Integrity is pinned via signing_key_fingerprint.
+base_url = "https://mirrors.kernel.org/fedora/releases/"
+variant_path = "Workstation/aarch64/iso"
+version_regex = 'href="([0-9]+\s*/)"'
+# Fedora ships Workstation aarch64 lives under the standard variant subtree
+iso_regex = 'href="(Fedora-Workstation-Live-(?:aarch64-[0-9][0-9.\-]*\.iso|[0-9][0-9.\-]*\.aarch64\.iso))"'
+checksum_url = "{base_url}{version}/{variant_dir}/{arch}/iso/{checksum_stem}-CHECKSUM"
+checksum_format = "gpg_checksum"
+signing_key_url = "https://fedoraproject.org/fedora.gpg"
+signing_key_fingerprint = [
+    "C6E7F081CF80E13146676E88829B606631645531",
+    "36F612DCF27F7D1A48A835E4DBFCF71C6D9F90A6",
+    "4F50A6114CD5C6976A7F1179655A4B02F577861E",
+    "D924B10D3E810DABDD8B56B596E7E91491211FCE",
+]
 
-[distros.ArchLinuxARM]
-clean_name = "Arch Linux ARM"
-keyword = "archlinuxarm"
-strategy = "direct_match"
-base_url = "https://os.archlinuxarm.org/os/"
-iso_regex = 'href="(ArchLinuxARM-rpi-aarch64-latest\.tar\.gz)"' # Note: ARM targets use rootfs archives or img files
+# NOTE: Arch Linux ARM was removed. os.archlinuxarm.org serves a TLS
+# certificate that does not match its hostname (scraping fails closed), and
+# its artifacts are per-device .tar.gz rootfs archives — not .iso/.img files
+# Ventoy can boot or visync can track. Re-add here if upstream publishes a
+# bootable image over a valid certificate.
 
 #############################
 ###### ADDITIONAL DT #######
@@ -117,12 +135,20 @@ clean_name = "Fedora KDE"
 keyword = "fedora-kde"
 strategy = "fedora_nested"
 variant_path = "KDE/x86_64/iso"
-base_url = "https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/"
-version_regex = 'href="([0-9\.]+)/"'
-iso_regex = 'href="(Fedora-KDE-Desktop-Live-x86_64-[0-9\.-]+\.iso)"'
+# dl.fedoraproject.org serves an Anubis bot challenge to scrapers; kernel.org
+# mirrors the same tree bot-free. Integrity is pinned via signing_key_fingerprint.
+base_url = "https://mirrors.kernel.org/fedora/releases/"
+version_regex = 'href="([0-9]+\s*/)"'
+iso_regex = 'href="(Fedora-KDE-Desktop-Live-(?:x86_64-[0-9][0-9.\-]*\.iso|[0-9][0-9.\-]*\.x86_64\.iso))"'
 checksum_url = "{base_url}{version}/{variant_dir}/{arch}/iso/{checksum_stem}-CHECKSUM"
 checksum_format = "gpg_checksum"
 signing_key_url = "https://fedoraproject.org/fedora.gpg"
+signing_key_fingerprint = [
+    "C6E7F081CF80E13146676E88829B606631645531",
+    "36F612DCF27F7D1A48A835E4DBFCF71C6D9F90A6",
+    "4F50A6114CD5C6976A7F1179655A4B02F577861E",
+    "D924B10D3E810DABDD8B56B596E7E91491211FCE",
+]
 
 [distros.UbuntuDesktop]
 clean_name = "Ubuntu Desktop"
@@ -174,6 +200,7 @@ base_url = "https://iso.omarchy.org/"
 iso_regex = '(omarchy-[0-9\.]+\.iso)'
 checksum_format = "sha256sums"
 checksum_algo = "sha256"
+checksum_url = "{base_url}{iso_name}.sha256"
 
 [distros.PopOS]
 clean_name = "Pop!_OS"

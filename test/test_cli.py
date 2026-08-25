@@ -205,10 +205,62 @@ class TestRemove(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             iso = Path(tmpdir) / "archlinux-2026.iso"
             iso.write_bytes(b"\x00" * 1024)
-            result = runner.invoke(app, ["remove", "archlinux", "--drive", tmpdir])
+            result = runner.invoke(app, ["remove", "archlinux", "--drive", tmpdir, "--yes"])
             self.assertEqual(result.exit_code, 0)
             self.assertFalse(iso.exists(), "File should be deleted")
             self.assertIn("removed", result.stdout)
+
+    @patch("src.main.identify_distro", side_effect=_mock_identify_distro)
+    @patch("src.main.get_iso_volume_id", side_effect=_mock_get_vid)
+    @patch("src.main.find_installed_isos", side_effect=_mock_find_installed)
+    @patch("src.main.load_config")
+    def test_remove_requires_confirmation_without_yes(
+        self, mock_cfg: MagicMock, *_: MagicMock
+    ) -> None:
+        """Without --yes and without interactive confirmation, nothing is deleted."""
+        mock_cfg.return_value = MOCK_CONFIG
+        with tempfile.TemporaryDirectory() as tmpdir:
+            iso = Path(tmpdir) / "archlinux-2026.iso"
+            iso.write_bytes(b"\x00" * 1024)
+            # No input provided -> confirm() aborts -> file must survive
+            result = runner.invoke(app, ["remove", "archlinux", "--drive", tmpdir])
+            self.assertNotEqual(result.exit_code, 0)
+            self.assertTrue(iso.exists(), "File must survive aborted confirmation")
+
+    @patch("src.main.identify_distro", side_effect=_mock_identify_distro)
+    @patch("src.main.get_iso_volume_id", side_effect=_mock_get_vid)
+    @patch("src.main.find_installed_isos", side_effect=_mock_find_installed)
+    @patch("src.main.load_config")
+    def test_remove_confirm_no_keeps_file(
+        self, mock_cfg: MagicMock, *_: MagicMock
+    ) -> None:
+        """Answering 'n' to the confirmation keeps the file."""
+        mock_cfg.return_value = MOCK_CONFIG
+        with tempfile.TemporaryDirectory() as tmpdir:
+            iso = Path(tmpdir) / "archlinux-2026.iso"
+            iso.write_bytes(b"\x00" * 1024)
+            result = runner.invoke(
+                app, ["remove", "archlinux", "--drive", tmpdir], input="n\n"
+            )
+            self.assertEqual(result.exit_code, 0)
+            self.assertTrue(iso.exists())
+            self.assertIn("nothing deleted", result.stdout)
+
+    @patch("src.main.identify_distro", side_effect=_mock_identify_distro)
+    @patch("src.main.get_iso_volume_id", side_effect=_mock_get_vid)
+    @patch("src.main.find_installed_isos", side_effect=_mock_find_installed)
+    @patch("src.main.load_config")
+    def test_remove_ambiguous_query_fails(
+        self, mock_cfg: MagicMock, *_: MagicMock
+    ) -> None:
+        """Ambiguous partial queries list candidates instead of picking one."""
+        mock_cfg.return_value = MOCK_CONFIG
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = runner.invoke(app, ["remove", "u", "--drive", tmpdir])
+            self.assertNotEqual(result.exit_code, 0)
+            self.assertIn("Ambiguous distro", result.stdout)
+            self.assertIn("Arch Linux", result.stdout)
+            self.assertIn("Ubuntu Server", result.stdout)
 
     def test_remove_has_flags(self) -> None:
         result = runner.invoke(app, ["remove", "--help"])
@@ -483,10 +535,34 @@ class TestNukeMetadata(unittest.TestCase):
             meta_dir.mkdir(parents=True)
             (meta_dir / "arch.iso.json").write_text("{}")
             (meta_dir / "ubuntu.iso.json").write_text("{}")
-            result = runner.invoke(app, ["nuke-metadata", "--drive", tmpdir])
+            result = runner.invoke(app, ["nuke-metadata", "--drive", tmpdir, "--yes"])
             self.assertEqual(result.exit_code, 0)
             self.assertIn("Deleted 2 metadata", result.stdout)
             self.assertFalse(meta_dir.exists())
+
+    def test_nuke_metadata_requires_confirmation(self) -> None:
+        """Without --yes, aborting the prompt leaves everything intact."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            meta_dir = Path(tmpdir) / ".visync" / "metadata"
+            meta_dir.mkdir(parents=True)
+            (meta_dir / "arch.iso.json").write_text("{}")
+            result = runner.invoke(app, ["nuke-metadata", "--drive", tmpdir])
+            self.assertNotEqual(result.exit_code, 0)
+            self.assertTrue((meta_dir / "arch.iso.json").exists())
+
+    def test_nuke_metadata_never_deletes_non_json(self) -> None:
+        """Files other than .json inside metadata/ are never deleted."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            meta_dir = Path(tmpdir) / ".visync" / "metadata"
+            meta_dir.mkdir(parents=True)
+            planted = meta_dir / "treasure.iso"
+            planted.write_bytes(b"MZ not-really-an-iso")
+            (meta_dir / "arch.iso.json").write_text("{}")
+            result = runner.invoke(app, ["nuke-metadata", "--drive", tmpdir, "--yes"])
+            self.assertEqual(result.exit_code, 0)
+            self.assertTrue(planted.exists(), "non-json file must survive")
+            self.assertIn("left in place", result.stdout)
+            self.assertFalse((meta_dir / "arch.iso.json").exists())
 
     def test_nuke_metadata_has_flags(self) -> None:
         """nuke-metadata accepts --config, --drive, --dry-run."""

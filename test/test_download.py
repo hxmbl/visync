@@ -358,6 +358,49 @@ class TestProcessScrapingStrategy(unittest.TestCase):
         _ok("Ping failure returns empty without fetching")
 
     @patch("src.download.ping_mirror", return_value=True)
+    @patch("src.download.fetch_html")
+    def test_fedora_dl_real_listing(self, mock_fetch_html: MagicMock, mock_ping: MagicMock):
+        """Suffix-style names actually served by dl.fedoraproject.org."""
+        _section("Strategy: fedora_nested — dl.fedoraproject.org real layout")
+        mock_fetch_html.side_effect = [
+            '<a href="42/">42/</a><a href="43/">43/</a>',
+            '<a href="?C=N;O=D" href="Fedora-Workstation-43-1.6-x86_64-CHECKSUM"></a>'
+            '<a href="Fedora-Workstation-Live-43-1.6.x86_64.iso">iso</a>',
+        ]
+        settings = {
+            "strategy": "fedora_nested",
+            "base_url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/",
+            "version_regex": 'href="([0-9]+\\s*/)"',
+            "iso_regex": 'href="(Fedora-Workstation-Live-(?:x86_64-[0-9][0-9.\\-]*\\.iso|[0-9][0-9.\\-]*\\.x86_64\\.iso))"',
+        }
+        name, url = process_scraping_strategy("Fedora", settings)
+        self.assertEqual(name, "Fedora-Workstation-Live-43-1.6.x86_64.iso")
+        self.assertIn("43/Workstation/x86_64/iso/", url)
+        _ok(f"Resolved from real-style listing: {name}")
+
+    @patch("src.download.ping_mirror", return_value=True)
+    @patch("src.download.fetch_html")
+    def test_fedora_arm_aarch64_tree(self, mock_fetch_html: MagicMock, mock_ping: MagicMock):
+        """FedoraARM scrapes the aarch64 subtree and ignores x86_64 lives."""
+        _section("Strategy: fedora_nested — FedoraARM aarch64")
+        mock_fetch_html.side_effect = [
+            '<a href="43/">43/</a>',
+            '<a href="Fedora-Workstation-Live-43-1.6.aarch64.iso">iso</a>'
+            '<a href="Fedora-Workstation-Live-43-1.6.x86_64.iso">wrong-arch</a>',
+        ]
+        settings = {
+            "strategy": "fedora_nested",
+            "base_url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/",
+            "variant_path": "Workstation/aarch64/iso",
+            "version_regex": 'href="([0-9]+\\s*/)"',
+            "iso_regex": 'href="(Fedora-Workstation-Live-(?:aarch64-[0-9][0-9.\\-]*\\.iso|[0-9][0-9.\\-]*\\.aarch64\\.iso))"',
+        }
+        name, url = process_scraping_strategy("Fedora ARM", settings)
+        self.assertEqual(name, "Fedora-Workstation-Live-43-1.6.aarch64.iso")
+        self.assertIn("/Workstation/aarch64/iso/", url)
+        _ok(f"aarch64 ISO resolved: {name}")
+
+    @patch("src.download.ping_mirror", return_value=True)
     def test_unknown_strategy(self, mock_ping: MagicMock):
         _section("Strategy: Unknown / Unrecognized")
         settings = {"strategy": "custom_strategy", "base_url": "https://example.com/"}

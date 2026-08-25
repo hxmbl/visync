@@ -5,17 +5,11 @@ State file: .visync/installed.json
 """
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from src.finder import (
-    find_installed_isos,
-    find_ventoy_drives,
-    get_iso_volume_id,
-    identify_distro,
-    load_config,
-)
-from src.output import console, error, info, success, warn
+from src.output import warn
 
 
 def _state_path(drive_root: Path) -> Path:
@@ -24,23 +18,33 @@ def _state_path(drive_root: Path) -> Path:
 
 
 def load_installed(drive_root: Path) -> dict:
-    """Load the installed distros state. Returns {entry_id: {installed_at, version}}."""
+    """Load the installed distros state. Returns {entry_id: {installed_at, version}}.
+
+    Corrupt or non-object JSON is treated as empty state (with a warning)
+    rather than crashing every subsequent command.
+    """
     path = _state_path(drive_root)
     if not path.exists():
         return {}
     try:
         with open(path) as f:
-            return json.load(f)
+            data = json.load(f)
     except (json.JSONDecodeError, OSError):
         return {}
+    if not isinstance(data, dict):
+        warn(f"installed.json has unexpected shape ({type(data).__name__}) — ignoring")
+        return {}
+    return data
 
 
 def save_installed(drive_root: Path, installed: dict) -> None:
-    """Save the installed distros state."""
+    """Save the installed distros state atomically (tmp file + rename)."""
     path = _state_path(drive_root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
+    tmp_path = path.with_suffix(".json.tmp")
+    with open(tmp_path, "w") as f:
         json.dump(installed, f, indent=2)
+    os.replace(tmp_path, path)
 
 
 def mark_installed(drive_root: Path, entry_id: str, version: str = "") -> None:
@@ -65,32 +69,52 @@ def get_installed_ids(drive_root: Path) -> list[str]:
     return list(load_installed(drive_root).keys())
 
 
-def resolve_distro(query: str, config: dict) -> str | None:
-    """Resolve a user query (name, keyword, partial match) to a distro entry_id.
+def matching_distros(query: str, config: dict) -> tuple[str | None, list[str]]:
+    """Match a user query to distro entry_ids.
 
-    Returns the entry_id if found, None otherwise.
+    Returns (exact_entry_id, partial_candidates). *exact_entry_id* is set for
+    an unambiguous exact match on entry_id, clean_name, or keyword.
+    *partial_candidates* lists every entry_id whose entry_id or clean_name
+    contains the query as a substring (possibly empty).
     """
     query_lower = query.lower().strip()
     if not query_lower:
-        return None
+        return None, []
     distros = config.get("distros", {})
 
-    # Exact match on entry_id
-    if query_lower in {k.lower() for k in distros}:
-        for key in distros:
-            if key.lower() == query_lower:
-                return key
+    for key in distros:
+        if key.lower() == query_lower:
+            return key, []
 
-    # Exact match on clean_name
     for entry_id, settings in distros.items():
         if settings.get("clean_name", "").lower() == query_lower:
-            return entry_id
+            return entry_id, []
 
-    # Partial match on clean_name, entry_id, or keyword
-    for entry_id, settings in distros.items():
-        clean = settings.get("clean_name", "").lower()
-        keyword = settings.get("keyword", "").lower()
-        if query_lower in clean or query_lower in entry_id.lower() or query_lower == keyword:
-            return entry_id
+    keyword_hits = [
+        entry_id for entry_id, settings in distros.items()
+        if settings.get("keyword", "").lower() == query_lower
+    ]
+    if len(keyword_hits) == 1:
+        return keyword_hits[0], []
 
+    partials = [
+        entry_id for entry_id, settings in distros.items()
+        if query_lower in settings.get("clean_name", "").lower()
+        or query_lower in entry_id.lower()
+    ]
+    return None, partials
+
+
+def resolve_distro(query: str, config: dict) -> str | None:
+    """Resolve a user query (name, keyword, partial match) to a distro entry_id.
+
+    Exact matches always win. Partial substring matches only resolve when
+    they are unique; ambiguous queries return None so callers can refuse
+    rather than act on an arbitrary pick.
+    """
+    exact, partials = matching_distros(query, config)
+    if exact:
+        return exact
+    if len(partials) == 1:
+        return partials[0]
     return None

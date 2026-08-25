@@ -166,9 +166,15 @@ class TestResolveDistro(unittest.TestCase):
         self.assertEqual(result, "ParrotSecurity")
 
     def test_resolve_partial_entry_id(self):
-        """Resolve by partial match on entry_id."""
-        result = resolve_distro("nix", self.config)
+        """Resolve by unambiguous partial match."""
+        result = resolve_distro("minimal", self.config)
         self.assertEqual(result, "NixOS")
+
+    def test_resolve_ambiguous_partial_returns_none(self):
+        """Ambiguous partial matches must not silently pick one distro."""
+        # "nixo" partially matches both NixOS and NixOSGraphical
+        result = resolve_distro("nixo", self.config)
+        self.assertIsNone(result)
 
     def test_resolve_not_found(self):
         """Returns None for unknown distro."""
@@ -330,7 +336,7 @@ class TestRemoveCommand(unittest.TestCase):
             _make_iso(drive, "archlinux-2026.06.01-x86_64.iso")
             _write_installed(drive, {"ArchLinux": {"version": "2026.06.01"}})
             with patch("src.main.get_iso_volume_id", return_value="Arch Linux 2026.06.01 x86_64"):
-                result = self.runner.invoke(self.app, ["remove", "archlinux"])
+                result = self.runner.invoke(self.app, ["remove", "archlinux", "--yes"])
             self.assertEqual(result.exit_code, 0)
             self.assertFalse((drive / "archlinux-2026.06.01-x86_64.iso").exists())
             installed = load_installed(drive)

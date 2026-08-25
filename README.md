@@ -90,6 +90,8 @@ Blank lines and lines starting with `#` are ignored.
 
 Edit `config.toml` to add or remove distros. Each distro entry defines a scraping strategy, mirror URL, and checksum verification method.
 
+Config resolution order: explicit `--config` path, then `$VISYNC_CONFIG`, then `~/.config/visync/config.toml`, then the packaged `config.toml`. A `config.toml` in the current directory is only used as a last resort, so planted configs cannot hijack identification.
+
 **Built-in strategies:**
 
 | Strategy | Description | Example |
@@ -115,11 +117,19 @@ Edit `config.toml` to add or remove distros. Each distro entry defines a scrapin
 
 ## Safety
 
-- `--clean` is dry-run by default — shows what would be deleted, requires `--clean` flag to actually delete
+- `--clean` is dry-run by default, and `--dry-run` is always honored — `sync --clean --dry-run` never deletes
+- `remove` and `nuke-metadata` show exactly what will be deleted and ask for confirmation (`--yes` skips)
+- Ambiguous distro queries are refused with candidate lists instead of acting on an arbitrary match
+- Distro matching uses whole-token keywords (`pop` does not match `popcorn.iso`)
 - `.visync/` watchdog enforces a 1 GiB ceiling (deep clean orphaned metadata, then wipe)
-- Guardrails prevent deletion of `.iso` or `.img` files under any circumstance
+- Guardrails prevent deletion of `.iso` or `.img` files under any circumstance — including inside `.visync/metadata`
+- Downloads use parallel range requests with per-chunk HTTP 206 and byte-count validation; truncated or range-ignoring servers fail loudly instead of producing silent corruption
+- Checksum mismatch deletes the download; an *unreachable* checksum source keeps the file and warns (`UNVERIFIED`)
+- HTTPS is enforced for all mirrors and checksum sources (loopback exempt); https→http redirects are blocked
+- Fedora GPG verification supports fingerprint pinning via `signing_key_fingerprint`
 - Failed downloads clean up `.part` files automatically
 - Install verifies file exists on drive before marking as installed
+- State and metadata writes are atomic (tmp file + rename)
 
 ## Tests
 

@@ -264,14 +264,14 @@ class TestVerifyIso(unittest.TestCase):
             _ok("Wrong hash correctly rejected")
 
     @patch("src.verify.urlopen")
-    def test_network_failure_returns_false(self, mock_urlopen: MagicMock) -> None:
+    def test_network_failure_raises_unavailable(self, mock_urlopen: MagicMock) -> None:
         _section("verify_iso: Network Failure")
         mock_urlopen.side_effect = Exception("connection timeout")
         with tempfile.TemporaryDirectory() as tmpdir:
             iso = self._make_iso(Path(tmpdir), b"x")
-            result = verify_iso(iso, "https://example.com/SHA256SUMS")
-            self.assertFalse(result)
-            _ok("Network failure returns False cleanly")
+            with self.assertRaises(ChecksumUnavailable):
+                verify_iso(iso, "https://example.com/SHA256SUMS")
+            _ok("Network failure raises ChecksumUnavailable (file must be kept)")
 
     @patch("src.verify.urlopen")
     def test_verify_json_format(self, mock_urlopen: MagicMock) -> None:
@@ -294,7 +294,7 @@ class TestVerifyIso(unittest.TestCase):
             _ok("JSON checksum format verified end-to-end")
 
     @patch("src.verify.urlopen")
-    def test_unknown_format_returns_false(self, mock_urlopen: MagicMock) -> None:
+    def test_unknown_format_raises_unavailable(self, mock_urlopen: MagicMock) -> None:
         _section("verify_iso: Unknown Format")
         mock_resp = MagicMock()
         mock_resp.read.return_value = b""
@@ -303,9 +303,22 @@ class TestVerifyIso(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             iso = self._make_iso(Path(tmpdir), b"x")
-            result = verify_iso(iso, "https://example.com/x", checksum_format="unknown")
-            self.assertFalse(result)
-            _ok("Unknown format returns False")
+            with self.assertRaises(ChecksumUnavailable):
+                verify_iso(iso, "https://example.com/x", checksum_format="unknown")
+            _ok("Unknown format raises ChecksumUnavailable (file must be kept)")
+
+    @patch("src.verify.urlopen")
+    def test_missing_entry_raises_unavailable(self, mock_urlopen: MagicMock) -> None:
+        """ISO absent from the sums file is 'unavailable', not a mismatch."""
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b"aaaa  some-other.iso\n"
+        mock_resp.__enter__.return_value = mock_resp
+        mock_urlopen.return_value = mock_resp
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            iso = self._make_iso(Path(tmpdir), b"real data")
+            with self.assertRaises(ChecksumUnavailable):
+                verify_iso(iso, "https://example.com/SHA256SUMS")
 
 
 class TestVerifyFromConfig(unittest.TestCase):

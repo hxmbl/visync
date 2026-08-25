@@ -1,6 +1,9 @@
 """Rich-based output formatting for visync."""
 
+import threading
+
 from rich.console import Console
+from rich.markup import escape as _esc
 from rich.progress import (
     BarColumn,
     DownloadColumn,
@@ -14,55 +17,61 @@ from rich.table import Table
 console = Console()
 
 _status: Status | None = None
+_spin_lock = threading.Lock()
 
 
 def spin_start(msg: str) -> None:
     """Start a global spinner at the bottom of the console."""
     global _status
-    _status = Status(msg, spinner="dots", console=console)
-    _status.start()
+    with _spin_lock:
+        if _status:
+            _status.stop()
+        _status = Status(msg, spinner="dots", console=console)
+        _status.start()
 
 
 def spin_update(msg: str) -> None:
     """Update the global spinner message."""
-    if _status:
-        _status.update(msg)
+    with _spin_lock:
+        if _status:
+            _status.update(_esc(str(msg)))
 
 
 def spin_stop() -> None:
     """Stop the global spinner."""
     global _status
-    if _status:
-        _status.stop()
-        _status = None
+    with _spin_lock:
+        if _status:
+            _status.stop()
+            _status = None
 
 
 def header(text: str) -> None:
-    console.print(f"\n[bold]{text}[/bold]\n")
+    console.print(f"\n[bold]{_esc(str(text))}[/bold]\n")
 
 
 def success(msg: str) -> None:
-    console.print(f"  [green]✓[/green] {msg}")
+    console.print(f"  [green]✓[/green] {_esc(str(msg))}")
 
 
 def info(msg: str) -> None:
-    console.print(f"  [dim]{msg}[/dim]")
+    console.print(f"  [dim]{_esc(str(msg))}[/dim]")
 
 
 def warn(msg: str) -> None:
-    console.print(f"  [yellow]⚠[/yellow] {msg}")
+    console.print(f"  [yellow]⚠[/yellow] {_esc(str(msg))}")
 
 
 def error(msg: str) -> None:
-    console.print(f"  [red]✗[/red] {msg}")
+    console.print(f"  [red]✗[/red] {_esc(str(msg))}")
 
 
 def removed(msg: str) -> None:
-    console.print(f"  [yellow]–[/yellow] {msg}")
+    console.print(f"  [yellow]–[/yellow] {_esc(str(msg))}")
 
 
 def iso_table(rows: list[tuple[str, str, str, str]], total_gb: float) -> None:
-    """Render a rich table of ISO files."""
+    """Render a rich table of ISO files. Cell values are markup-escaped."""
     table = Table(
         show_header=True,
         header_style="bold",
@@ -75,7 +84,7 @@ def iso_table(rows: list[tuple[str, str, str, str]], total_gb: float) -> None:
     table.add_column("Filename", style="dim")
 
     for distro, version, size, filename in rows:
-        table.add_row(distro, version, size, filename)
+        table.add_row(_esc(distro), _esc(version), _esc(size), _esc(filename))
 
     console.print(table)
     console.print(

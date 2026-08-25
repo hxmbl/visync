@@ -7,32 +7,62 @@ from the file header, maps IDs to friendly distro names, and discovers
 """
 
 import json
+import os
+import re
 import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 
-from src.output import console, warn
+from rich.markup import escape as _escape
+
+from src.output import console
+
+_CONFIG_CACHE: dict | None = None
+
+
+def reset_config_cache() -> None:
+    """Forget the cached config so the next load re-resolves from disk."""
+    global _CONFIG_CACHE
+    _CONFIG_CACHE = None
+
+
+def _config_candidates() -> list[Path]:
+    """Config search order: env override, user config, packaged config, cwd last."""
+    candidates = []
+    env_path = os.environ.get("VISYNC_CONFIG")
+    if env_path:
+        candidates.append(Path(env_path))
+    candidates.append(Path.home() / ".config" / "visync" / "config.toml")
+    candidates.append(Path(__file__).parent.parent / "config.toml")
+    candidates.append(Path.cwd() / "config.toml")
+    return candidates
+
 
 def load_config(config_path: Path | None = None) -> dict:
-    """Load configuration dictionary maps and distro settings from config.toml."""
+    """Load configuration dictionary maps and distro settings from config.toml.
+
+    With no explicit path, resolves in a fixed order (env, user, packaged,
+    cwd-last) and caches the result so distro identification always agrees
+    with the config the command loaded — including an explicit --config.
+    """
+    global _CONFIG_CACHE
     if config_path is None:
-        cwd = Path.cwd()
-        for candidate in [
-            cwd / "config.toml",
-            cwd.parent / "config.toml",
-            Path(__file__).parent.parent / "config.toml",
-        ]:
+        if _CONFIG_CACHE is not None:
+            return _CONFIG_CACHE
+        for candidate in _config_candidates():
             if candidate.is_file():
                 config_path = candidate
                 break
         else:
-            config_path = cwd / "config.toml"
+            config_path = Path.cwd() / "config.toml"
     try:
         with open(config_path, "rb") as f:
-            return tomllib.load(f)
+            data = tomllib.load(f)
     except Exception as e:
-        console.print(f"  [red]✗[/red] Failed to parse config.toml: {e}")
+        console.print(f"  [red]✗[/red] Failed to parse config.toml: {_escape(str(e))}")
         return {}
+    _CONFIG_CACHE = data
+    return data
 
 
 def _mount_device(dev: str, detected: list[Path]) -> None:
@@ -51,6 +81,10 @@ def _mount_device(dev: str, detected: list[Path]) -> None:
             detected.append(mount_dir)
     except Exception:
         pass
+    finally:
+        if not detected or not mount_dir.is_dir() or not any(mount_dir.iterdir()):
+            import shutil
+            shutil.rmtree(mount_dir, ignore_errors=True)
 
 
 def _udisksctl_mount(dev: str) -> Path | None:
@@ -65,9 +99,16 @@ def _udisksctl_mount(dev: str) -> Path | None:
         if result.returncode == 0:
             # Output: "Mounted /dev/sdX1 at /run/media/$USER/Ventoy"
             for line in result.stdout.strip().splitlines():
-                if "at " in line:
-                    mount_point = line.split("at ", 1)[-1].strip().rstrip(".")
+                if " at " in line:
+                    mount_point = line.split(" at ", 1)[-1].strip().rstrip(".")
                     return Path(mount_point)
+            # Localized/unexpected output: ask the system where it landed
+            findmnt = subprocess.run(
+                ["findmnt", "-rn", "-o", "TARGET", "--source", dev],
+                capture_output=True, text=True, timeout=10,
+            )
+            if findmnt.returncode == 0 and findmnt.stdout.strip():
+                return Path(findmnt.stdout.strip().splitlines()[0])
     except FileNotFoundError:
         pass  # udisksctl not installed
     except Exception:
@@ -225,6 +266,23 @@ def get_iso_volume_id(iso_path: Path) -> str:
         return ""
 
 
+def _norm_tokens(text: str) -> str:
+    """Lowercase and collapse every non-alphanumeric run into single spaces."""
+    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+
+
+def keyword_hit(keyword: str, text: str) -> bool:
+    """Whole-token match of *keyword* inside *text*.
+
+    'pop' matches 'pop-os_1.iso' or volume 'POP OS' but not 'popcorn'.
+    Multi-part keywords ('nixos-minimal') must appear as consecutive tokens.
+    """
+    kw = _norm_tokens(keyword)
+    if not kw:
+        return False
+    return re.search(rf"(?<!\w){re.escape(kw)}(?!\w)", _norm_tokens(text)) is not None
+
+
 def identify_distro(volume_id: str, file_name: str) -> str:
     """Match the OS distribution using a cascading hybrid approach.
 
@@ -241,17 +299,17 @@ def identify_distro(volume_id: str, file_name: str) -> str:
     # Check standalone matches first — they're more specific than base distros
     standalone_matches = config.get("standalone_matches", {})
     for keyword, clean_name in standalone_matches.items():
-        if keyword in vol_lower or keyword in file_lower:
+        if keyword_hit(keyword, vol_lower) or keyword_hit(keyword, file_lower):
             return clean_name
 
     base_distros = config.get("base_distros", {})
     fork_overrides = config.get("fork_overrides", {})
 
     for base_key, base_name in base_distros.items():
-        if base_key in vol_lower:
+        if keyword_hit(base_key, vol_lower):
             for override_key, clean_name in fork_overrides.items():
                 parent, _, keyword = override_key.partition(".")
-                if parent == base_key and keyword in file_lower:
+                if parent == base_key and keyword_hit(keyword, file_lower):
                     return clean_name
             return base_name
 
@@ -323,10 +381,12 @@ def write_iso_metadata(
         "sync_timestamp": datetime.now(timezone.utc).isoformat(),
     }
     try:
-        with open(meta_file, "w") as f:
+        tmp_file = meta_file.with_suffix(".json.tmp")
+        with open(tmp_file, "w") as f:
             json.dump(manifest, f, indent=2)
+        os.replace(tmp_file, meta_file)
     except OSError as e:
-        console.print(f"  [yellow]⚠[/yellow] Could not write metadata for {filename}: {e}")
+        console.print(f"  [yellow]⚠[/yellow] Could not write metadata for {_escape(filename)}: {_escape(str(e))}")
 
 
 def remove_iso_metadata(drive_root: Path, filename: str) -> None:
@@ -464,13 +524,13 @@ def visync_watchdog(drive_root: Path) -> None:
         import shutil
         try:
             shutil.rmtree(visync_dir)
-            console.print(f"  [green]✓[/green] .visync/ wiped. Metadata will rebuild on next sync.")
+            console.print("  [green]✓[/green] .visync/ wiped. Metadata will rebuild on next sync.")
         except OSError as e:
-            console.print(f"  [yellow]⚠[/yellow] Could not wipe .visync/: {e}")
+            console.print(f"  [yellow]⚠[/yellow] Could not wipe .visync/: {_escape(str(e))}")
     except ValueError:
         raise
     except Exception as e:
-        console.print(f"  [yellow]⚠[/yellow] Watchdog error: {e}")
+        console.print(f"  [yellow]⚠[/yellow] Watchdog error: {_escape(str(e))}")
 
 
 def _deep_clean_metadata(drive_root: Path) -> None:
@@ -499,10 +559,10 @@ def _deep_clean_metadata(drive_root: Path) -> None:
                     meta_file.unlink()
                     removed += 1
                 except OSError as e:
-                    console.print(f"  [yellow]⚠[/yellow] Could not remove {meta_file.name}: {e}")
+                    console.print(f"  [yellow]⚠[/yellow] Could not remove {_escape(meta_file.name)}: {_escape(str(e))}")
         if removed:
             console.print(f"  [dim]Removed {removed} orphaned metadata file(s).[/dim]")
     except ValueError:
         raise
     except Exception as e:
-        console.print(f"  [yellow]⚠[/yellow] Deep clean error: {e}")
+        console.print(f"  [yellow]⚠[/yellow] Deep clean error: {_escape(str(e))}")

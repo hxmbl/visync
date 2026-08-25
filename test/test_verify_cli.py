@@ -30,8 +30,19 @@ class TestExtractIsoMetadata(unittest.TestCase):
         meta = extract_iso_metadata("Fedora-KDE-Desktop-Live-44-1.7.x86_64.iso")
         self.assertEqual(meta["version"], "44")
         self.assertEqual(meta["arch"], "x86_64")
-        self.assertEqual(meta["variant_dir"], "Fedora-KDE-Desktop")
-        self.assertEqual(meta["checksum_stem"], "Fedora-KDE-Desktop-Live-44-1.7")
+        self.assertEqual(meta["variant_dir"], "KDE")
+        # dl.fedoraproject.org CHECKSUM convention: Fedora-{variant}-{maj}-{min}-{arch}
+        self.assertEqual(meta["checksum_stem"], "Fedora-KDE-44-1.7-x86_64")
+
+    def test_fedora_modern_naming(self) -> None:
+        """Modern Fedora spins carry arch as an infix, not a suffix."""
+        meta = extract_iso_metadata("Fedora-Workstation-Live-x86_64-42-1.1.iso")
+        self.assertEqual(meta["version"], "42")
+        self.assertEqual(meta["arch"], "x86_64")
+        self.assertEqual(meta["variant_dir"], "Workstation")
+        self.assertEqual(
+            meta["checksum_stem"], "Fedora-Workstation-Live-x86_64-42-1.1"
+        )
 
     def test_ubuntu_server_iso(self) -> None:
         meta = extract_iso_metadata("ubuntu-24.04.4-live-server-amd64.iso")
@@ -55,12 +66,36 @@ class TestExpandUrlVersion(unittest.TestCase):
         url = expand_url(
             "{base_url}{version}/{variant_dir}/{arch}/iso/{checksum_stem}-CHECKSUM",
             "Fedora-KDE-Desktop-Live-44-1.7.x86_64.iso",
+            "https://dl.fedoraproject.org/pub/fedora/linux/releases/",
+        )
+        self.assertEqual(
+            url,
+            "https://dl.fedoraproject.org/pub/fedora/linux/releases/"
+            "44/KDE/x86_64/iso/Fedora-KDE-44-1.7-x86_64-CHECKSUM",
+        )
+
+    def test_fedora_checksum_url_workstation_real_layout(self) -> None:
+        url = expand_url(
+            "{base_url}{version}/{variant_dir}/{arch}/iso/{checksum_stem}-CHECKSUM",
+            "Fedora-Workstation-Live-43-1.6.x86_64.iso",
+            "https://dl.fedoraproject.org/pub/fedora/linux/releases/",
+        )
+        self.assertEqual(
+            url,
+            "https://dl.fedoraproject.org/pub/fedora/linux/releases/"
+            "43/Workstation/x86_64/iso/Fedora-Workstation-43-1.6-x86_64-CHECKSUM",
+        )
+
+    def test_fedora_checksum_url_modern_naming(self) -> None:
+        url = expand_url(
+            "{base_url}{version}/{variant_dir}/{arch}/iso/{checksum_stem}-CHECKSUM",
+            "Fedora-Workstation-Live-x86_64-42-1.1.iso",
             "https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/",
         )
         self.assertEqual(
             url,
             "https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/"
-            "44/Fedora-KDE-Desktop/x86_64/iso/Fedora-KDE-Desktop-Live-44-1.7-CHECKSUM",
+            "42/Workstation/x86_64/iso/Fedora-Workstation-Live-x86_64-42-1.1-CHECKSUM",
         )
 
 
