@@ -363,7 +363,16 @@ def update(
         if name:
             entry_id = resolve_distro(name, config_data)
             if not entry_id:
-                error(f"Unknown distro: '{name}'")
+                from src.pm import matching_distros
+                _, partials = matching_distros(name, config_data)
+                if partials:
+                    candidate_names = ", ".join(sorted(
+                        config_data.get("distros", {}).get(p, {}).get("clean_name", p)
+                        for p in partials
+                    ))
+                    error(f"Ambiguous distro '{name}' — matches: {candidate_names}. Be specific.")
+                else:
+                    error(f"Unknown distro: '{name}'")
                 raise typer.Exit(1)
             only = [entry_id]
         else:

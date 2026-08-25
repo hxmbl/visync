@@ -55,6 +55,11 @@ def load_config(config_path: Path | None = None) -> dict:
                 break
         else:
             config_path = Path.cwd() / "config.toml"
+            if os.environ.get("VISYNC_CONFIG"):
+                console.print(
+                    "  [yellow]⚠[/yellow] VISYNC_CONFIG is set but the file does "
+                    "not exist — falling back to the default config."
+                )
     try:
         with open(config_path, "rb") as f:
             data = tomllib.load(f)
@@ -354,11 +359,13 @@ def read_iso_metadata(drive_root: Path, filename: str) -> dict | None:
     try:
         with open(meta_file, "r") as f:
             data = json.load(f)
-        # Validate required keys exist
-        if "variant_stem" in data and "version" in data:
-            return data
-    except (json.JSONDecodeError, OSError, KeyError):
-        pass
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    # Validate required keys exist
+    if "variant_stem" in data and "version" in data:
+        return data
     return None
 
 
@@ -547,9 +554,13 @@ def _deep_clean_metadata(drive_root: Path) -> None:
 
         existing_isos = {p.name for p in find_installed_isos(drive_root)}
         removed = 0
+        skipped_non_json = 0
         for meta_file in metadata_dir.iterdir():
-            # GUARDRAIL: Only allow .json files — reject anything else immediately
+            # GUARDRAIL: Only allow .json files — anything else is left alone
             if not meta_file.is_file():
+                continue
+            if meta_file.suffix.lower() not in _WATCHDOG_ALLOWED_EXTENSIONS:
+                skipped_non_json += 1
                 continue
             _guard_json_only(meta_file)
 
@@ -562,6 +573,8 @@ def _deep_clean_metadata(drive_root: Path) -> None:
                     console.print(f"  [yellow]⚠[/yellow] Could not remove {_escape(meta_file.name)}: {_escape(str(e))}")
         if removed:
             console.print(f"  [dim]Removed {removed} orphaned metadata file(s).[/dim]")
+        if skipped_non_json:
+            console.print(f"  [yellow]⚠[/yellow] Skipped {skipped_non_json} non-metadata file(s) in .visync/metadata/.")
     except ValueError:
         raise
     except Exception as e:

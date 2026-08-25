@@ -567,3 +567,61 @@ class TestValidSigPrimaryField(unittest.TestCase):
                   "2026-01-01 0 pi 1 1 1 01 "
                   "DEAD00000000000000000000000000000000BEEF\n")
         self.assertFalse(self._run(stdout))
+
+
+# ── S1: scalar metadata JSON must degrade, not crash metadata consumers ──────
+
+
+class TestHostileMetadataShapes(unittest.TestCase):
+    def test_scalar_metadata_ignored(self):
+        from src.finder import load_all_metadata
+
+        with tempfile.TemporaryDirectory() as tmp:
+            drive = Path(tmp)
+            meta = drive / ".visync" / "metadata"
+            meta.mkdir(parents=True)
+            (meta / "weird.iso.json").write_text("5")
+            (meta / "bool.iso.json").write_text("true")
+            (meta / "good.iso.json").write_text('{"variant_stem": "x", "version": "1"}')
+            result = load_all_metadata(drive)
+        self.assertEqual(list(result.keys()), ["good.iso"])
+
+
+# ── S2: watchdog deep-clean skips non-json instead of aborting the sync ──────
+
+
+class TestWatchdogSkipsNonJson(unittest.TestCase):
+    def test_deep_clean_survives_stray_iso_in_metadata(self):
+        from src.finder import _deep_clean_metadata
+
+        with tempfile.TemporaryDirectory() as tmp:
+            drive = Path(tmp)
+            meta = drive / ".visync" / "metadata"
+            meta.mkdir(parents=True)
+            stray = meta / "planted.iso"
+            stray.write_bytes(b"\x00" * 64)
+            orphan = meta / "gone.iso.json"
+            orphan.write_text('{"variant_stem": "x", "version": "1"}')
+
+            _deep_clean_metadata(drive)
+
+            self.assertFalse(orphan.exists(), "orphaned json should be cleaned")
+            self.assertTrue(stray.exists(), "non-json must never be deleted")
+
+    def test_watchdog_over_limit_wipes_but_only_visync(self):
+        """Stage-2 wipe removes .visync contents but nothing outside it."""
+        from src.finder import visync_watchdog, VISYNC_SIZE_LIMIT
+
+        with tempfile.TemporaryDirectory() as tmp:
+            drive = Path(tmp)
+            visync_dir = drive / ".visync"
+            (visync_dir / "metadata").mkdir(parents=True)
+            (visync_dir / "metadata" / "gone.iso.json").write_text("{}")
+            keeper = drive / "archlinux-2026.iso"
+            keeper.write_bytes(b"\x00" * 64)
+            (visync_dir / "ballast.bin").write_bytes(b"\0" * (VISYNC_SIZE_LIMIT + 1))
+
+            visync_watchdog(drive)
+
+            self.assertFalse(visync_dir.exists(), "over-budget .visync gets wiped")
+            self.assertTrue(keeper.exists(), "drive content outside .visync untouched")

@@ -336,32 +336,32 @@ class TestDeepCleanMetadata(unittest.TestCase):
             _deep_clean_metadata(Path(tmpdir))
             _ok("No exception raised")
 
-    def test_raises_on_non_json_file_in_metadata(self):
-        _section("_deep_clean_metadata: Rejects .iso in metadata dir")
+    def test_skips_non_json_file_in_metadata(self):
+        _section("_deep_clean_metadata: Leaves non-json files in place")
         with tempfile.TemporaryDirectory() as tmpdir:
             drive = Path(tmpdir)
             meta_dir = ensure_visync_dir(drive)
-            # Plant an .iso file inside metadata/ — should trigger guard
+            # Plant an .iso file inside metadata/ — must be skipped, never deleted
             (meta_dir / "sneaky.iso").touch()
-            with self.assertRaises(ValueError) as ctx:
-                _deep_clean_metadata(drive)
-            self.assertIn("SAFETY BLOCK", str(ctx.exception))
-            self.assertIn(".iso", str(ctx.exception))
+            (meta_dir / "gone.iso.json").write_text('{"v":2}')
+            _deep_clean_metadata(drive)
+            self.assertTrue((meta_dir / "sneaky.iso").exists(),
+                            "non-json file must be left in place")
+            self.assertFalse((meta_dir / "gone.iso.json").exists())
+            _ok("Stray .iso skipped, orphan json still removed")
             # The .iso file must NOT have been deleted
             self.assertTrue((meta_dir / "sneaky.iso").exists())
             _ok("ValueError raised, .iso file untouched")
 
-    def test_raises_on_img_file_in_metadata(self):
-        _section("_deep_clean_metadata: Rejects .img in metadata dir")
+    def test_skips_img_file_in_metadata(self):
+        _section("_deep_clean_metadata: Leaves .img in place")
         with tempfile.TemporaryDirectory() as tmpdir:
             drive = Path(tmpdir)
             meta_dir = ensure_visync_dir(drive)
             (meta_dir / "disk.img").touch()
-            with self.assertRaises(ValueError) as ctx:
-                _deep_clean_metadata(drive)
-            self.assertIn("SAFETY BLOCK", str(ctx.exception))
+            _deep_clean_metadata(drive)
             self.assertTrue((meta_dir / "disk.img").exists())
-            _ok("ValueError raised, .img file untouched")
+            _ok(".img file skipped and untouched")
 
 
 # ── Guardrail tests ──────────────────────────────────────────────
@@ -495,21 +495,18 @@ class TestWatchdogGuardrails(unittest.TestCase):
             self.assertIn("SAFETY BLOCK", str(ctx.exception))
             _ok("ValueError raised when path IS the root")
 
-    def test_deep_clean_raises_on_iso_in_metadata(self):
-        _section("deep clean: ValueError stops before deleting .iso")
+    def test_deep_clean_skips_iso_and_cleans_rest(self):
+        _section("deep clean: stray .iso skipped, other orphans still cleaned")
         with tempfile.TemporaryDirectory() as tmpdir:
             drive = Path(tmpdir)
-            (drive / "real.iso").write_bytes(b"data")
             meta_dir = ensure_visync_dir(drive)
-            (meta_dir / "real.iso.json").write_text('{"v":1}')
-            # Plant an .iso directly in metadata/
             (meta_dir / "rogue.iso").touch()
-            with self.assertRaises(ValueError):
-                _deep_clean_metadata(drive)
-            # Neither file should have been deleted
-            self.assertTrue((meta_dir / "real.iso.json").exists())
+            (meta_dir / "gone.iso.json").write_text('{"v":1}')
+            _deep_clean_metadata(drive)
+            # Stray iso preserved; orphan json removed
             self.assertTrue((meta_dir / "rogue.iso").exists())
-            _ok("Both files preserved, ValueError raised")
+            self.assertFalse((meta_dir / "gone.iso.json").exists())
+            _ok("Stray .iso preserved, orphan json cleaned")
 
     def test_watchdog_wipes_only_when_path_valid(self):
         _section("watchdog: Successful wipe with correct path")
