@@ -498,7 +498,10 @@ def download_iso(
     Returns True on success, False on failure.
     """
     _debug(f"Starting download: {url} -> {dest_path}")
-    console.print(f"  [cyan]↓[/cyan] Downloading [bold]{_esc(dest_path.name)}[/bold]")
+    if drive_root and dest_path.parent != drive_root:
+        console.print(f"  [cyan]↓[/cyan] Downloading to staging: [bold]{_esc(dest_path.name)}[/bold]")
+    else:
+        console.print(f"  [cyan]↓[/cyan] Downloading: [bold]{_esc(dest_path.name)}[/bold]")
 
     require_https(url, "ISO download")
 
@@ -567,7 +570,10 @@ def download_iso(
         return False
 
     part_path.rename(dest_path)
-    success(f"Downloaded {dest_path.name}")
+    if drive_root and dest_path.parent != drive_root:
+        success(f"Downloaded to staging: {dest_path.name}")
+    else:
+        success(f"Downloaded: {dest_path.name}")
 
     # Compute SHA-256 once — used for both verification and metadata
     sha256_hex = ""
@@ -855,7 +861,7 @@ def _copy_with_progress(src: Path, dst: Path, filename: str) -> None:
     """
     total = src.stat().st_size
     with make_download_progress() as progress:
-        task = progress.add_task("copy", filename=_esc(filename), total=total or None)
+        task = progress.add_task("copy to drive", filename=_esc(filename), total=total or None)
         copied = 0
         with open(src, "rb") as rf, open(dst, "wb") as wf:
             while True:
@@ -1010,8 +1016,9 @@ def sync_all_configured_distros(
                 try:
                     try:
                         dest.rename(drive_dest)
-                        success(f"Moved {latest_filename} to Ventoy drive")
+                        success(f"Moved to Ventoy drive: {latest_filename}")
                     except OSError:
+                        info(f"Copying to Ventoy drive: {latest_filename}")
                         _copy_with_progress(dest, drive_dest, latest_filename)
                         if drive_dest.stat().st_size != dest.stat().st_size:
                             error(
@@ -1020,10 +1027,16 @@ def sync_all_configured_distros(
                             )
                             drive_dest.unlink(missing_ok=True)
                             continue
-                        success(f"Copied {latest_filename} to Ventoy drive")
+                        success(f"Copied to Ventoy drive: {latest_filename}")
                 except OSError as e:
                     error(f"Failed placing {latest_filename} on drive: {e}")
-                    drive_dest.unlink(missing_ok=True)
+                    try:
+                        drive_dest.unlink(missing_ok=True)
+                    except OSError as unlink_err:
+                        if unlink_err.errno == 30:
+                            warn(f"Drive became read-only (unplugged?), skipping cleanup of {drive_dest}")
+                        else:
+                            warn(f"Could not remove partial file {drive_dest}: {unlink_err}")
                     continue
                 try:
                     dest.unlink(missing_ok=True)
