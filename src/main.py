@@ -13,10 +13,11 @@ from src.finder import (
     find_ventoy_drives,
     get_iso_volume_id,
     identify_distro,
-    load_config,
     load_all_metadata,
+    load_config,
 )
-from src.output import console, error, header, info as output_info, iso_table, success, warn
+from src.output import console, error, header, iso_table, success, warn
+from src.output import info as output_info
 from src.verify import extract_version_from_filename, run_directory_verify
 
 app = typer.Typer()
@@ -82,12 +83,16 @@ def _get_drives(drives: list[Path] | None = None) -> list[Path]:
                     raise ValueError(f"invalid index {idx}")
             return selected
         except ValueError as e:
-            error(f"Invalid input: {e}. Enter numbers 1-{len(detected)} separated by commas.")
+            error(
+                f"Invalid input: {e}. Enter numbers 1-{len(detected)} separated by commas."
+            )
 
 
 @app.command()
 def install(
-    name: str | None = typer.Argument(default=None, help="Distro name or keyword to install"),
+    name: str | None = typer.Argument(
+        default=None, help="Distro name or keyword to install"
+    ),
     config: Path | None = typer.Option(
         None, "--config", "-c", help="Path to config file"
     ),
@@ -98,13 +103,19 @@ def install(
         None, "--file", "-i", help="File with one distro name per line"
     ),
     dry_run: bool = typer.Option(
-        False, "--dry-run", "-n", help="Show what would be installed without downloading"
+        False,
+        "--dry-run",
+        "-n",
+        help="Show what would be installed without downloading",
     ),
     no_verify: bool = typer.Option(
         False, "--no-verify", help="Skip checksum verification after download"
     ),
     no_staging: bool = typer.Option(
-        False, "--no-staging", "--no-buffer", help="Download directly to the Ventoy drive (skip staging buffer)"
+        False,
+        "--no-staging",
+        "--no-buffer",
+        help="Download directly to the Ventoy drive (skip staging buffer)",
     ),
 ) -> None:
     """Download and install distros to the Ventoy drive.
@@ -141,11 +152,15 @@ def install(
         if not entry_id:
             _, partials = matching_distros(n, config_data)
             if partials:
-                candidate_names = ", ".join(sorted(
-                    config_data.get("distros", {}).get(p, {}).get("clean_name", p)
-                    for p in partials
-                ))
-                error(f"Ambiguous distro '{n}' — matches: {candidate_names}. Be specific.")
+                candidate_names = ", ".join(
+                    sorted(
+                        config_data.get("distros", {}).get(p, {}).get("clean_name", p)
+                        for p in partials
+                    )
+                )
+                error(
+                    f"Ambiguous distro '{n}' — matches: {candidate_names}. Be specific."
+                )
             else:
                 error(f"Unknown distro: '{n}'")
             continue
@@ -205,7 +220,9 @@ def install(
             output_info(f"Would download {len(to_download)} distro(s):")
             for entry_id in to_download:
                 distro_config = config_data.get("distros", {}).get(entry_id, {})
-                console.print(f"    [cyan]→[/cyan] {_esc(str(distro_config.get('clean_name', entry_id)))}")
+                console.print(
+                    f"    [cyan]→[/cyan] {_esc(str(distro_config.get('clean_name', entry_id)))}"
+                )
             continue
 
         output_info(f"Installing {len(to_download)} distro(s)...")
@@ -250,9 +267,7 @@ def remove(
     dry_run: bool = typer.Option(
         False, "--dry-run", "-n", help="Show what would be removed without deleting"
     ),
-    yes: bool = typer.Option(
-        False, "--yes", "-y", help="Skip confirmation prompt"
-    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:
     """Remove a distro from the Ventoy drive."""
     from src.finder import remove_iso_metadata
@@ -265,11 +280,15 @@ def remove(
     if not entry_id:
         _, partials = matching_distros(name, config_data)
         if partials:
-            candidate_names = ", ".join(sorted(
-                config_data.get("distros", {}).get(p, {}).get("clean_name", p)
-                for p in partials
-            ))
-            error(f"Ambiguous distro '{name}' — matches: {candidate_names}. Be specific.")
+            candidate_names = ", ".join(
+                sorted(
+                    config_data.get("distros", {}).get(p, {}).get("clean_name", p)
+                    for p in partials
+                )
+            )
+            error(
+                f"Ambiguous distro '{name}' — matches: {candidate_names}. Be specific."
+            )
         else:
             error(f"Unknown distro: '{name}'")
         raise typer.Exit(1)
@@ -304,7 +323,9 @@ def remove(
             continue
 
         if not yes:
-            console.print(f"  About to delete {len(matches)} file(s) from {_esc(str(ventoy_root))}:")
+            console.print(
+                f"  About to delete {len(matches)} file(s) from {_esc(str(ventoy_root))}:"
+            )
             for iso_path in matches:
                 console.print(f"    [red]×[/red] {_esc(iso_path.name)}")
             try:
@@ -333,19 +354,17 @@ def remove(
 
 @app.command()
 def update(
-    name: str | None = typer.Argument(default=None, help="Distro to update (all if omitted)"),
+    name: str | None = typer.Argument(
+        default=None, help="Distro to update (all if omitted)"
+    ),
     config: Path | None = typer.Option(
         None, "--config", "-c", help="Path to config file"
     ),
     drive: str | None = typer.Option(
         None, "--drive", "-d", help="Ventoy drive path(s), comma-separated for multiple"
     ),
-    force: bool = typer.Option(
-        False, "--force", "-f", help="Force re-download"
-    ),
-    clean: bool = typer.Option(
-        False, "--clean", help="Remove old versions"
-    ),
+    force: bool = typer.Option(False, "--force", "-f", help="Force re-download"),
+    clean: bool = typer.Option(False, "--clean", help="Remove old versions"),
     dry_run: bool = typer.Option(
         False, "--dry-run", "-n", help="Show what would be updated without downloading"
     ),
@@ -353,12 +372,16 @@ def update(
         False, "--no-verify", help="Skip checksum verification after download"
     ),
     no_staging: bool = typer.Option(
-        False, "--no-staging", "--no-buffer", help="Download directly to the Ventoy drive (skip staging buffer)"
+        False,
+        "--no-staging",
+        "--no-buffer",
+        help="Download directly to the Ventoy drive (skip staging buffer)",
     ),
 ) -> None:
     """Update installed distros to latest versions."""
     from src.download import sync_all_configured_distros
-    from src.pm import get_installed_ids, mark_installed as _mark_installed, resolve_distro
+    from src.pm import get_installed_ids, resolve_distro
+    from src.pm import mark_installed as _mark_installed
     from src.verify import extract_version_from_filename as _extract_ver
 
     config_data = load_config(config)
@@ -373,13 +396,20 @@ def update(
             entry_id = resolve_distro(name, config_data)
             if not entry_id:
                 from src.pm import matching_distros
+
                 _, partials = matching_distros(name, config_data)
                 if partials:
-                    candidate_names = ", ".join(sorted(
-                        config_data.get("distros", {}).get(p, {}).get("clean_name", p)
-                        for p in partials
-                    ))
-                    error(f"Ambiguous distro '{name}' — matches: {candidate_names}. Be specific.")
+                    candidate_names = ", ".join(
+                        sorted(
+                            config_data.get("distros", {})
+                            .get(p, {})
+                            .get("clean_name", p)
+                            for p in partials
+                        )
+                    )
+                    error(
+                        f"Ambiguous distro '{name}' — matches: {candidate_names}. Be specific."
+                    )
                 else:
                     error(f"Unknown distro: '{name}'")
                 raise typer.Exit(1)
@@ -408,7 +438,11 @@ def update(
                 clean_name = distro_config.get("clean_name", eid)
                 for iso_path in existing:
                     vid = get_iso_volume_id(iso_path)
-                    distro = identify_distro(vid, iso_path.name) if vid else identify_distro("", iso_path.name)
+                    distro = (
+                        identify_distro(vid, iso_path.name)
+                        if vid
+                        else identify_distro("", iso_path.name)
+                    )
                     if distro.lower() == clean_name.lower():
                         version = _extract_ver(iso_path.name) or ""
                         _mark_installed(ventoy_root, eid, version=version)
@@ -417,7 +451,9 @@ def update(
 
 @app.command()
 def search(
-    query: str | None = typer.Argument(default=None, help="Search query (lists all if omitted)"),
+    query: str | None = typer.Argument(
+        default=None, help="Search query (lists all if omitted)"
+    ),
     config: Path | None = typer.Option(
         None, "--config", "-c", help="Path to config file"
     ),
@@ -447,13 +483,21 @@ def search(
         if entry_id:
             s = distros[entry_id]
             console.print()
-            console.print(f"  [bold]{_esc(str(s.get('clean_name', entry_id)))}[/bold] [dim]({_esc(entry_id)})[/dim]")
+            console.print(
+                f"  [bold]{_esc(str(s.get('clean_name', entry_id)))}[/bold] [dim]({_esc(entry_id)})[/dim]"
+            )
             console.print(f"    strategy: {s.get('strategy', '?')}")
             if s.get("base_url"):
                 console.print(f"    url: {_esc(str(s['base_url']))}")
             for vr in target_drives:
-                status = "installed" if entry_id in installed_by_drive[vr] else "available"
-                marker = "[green]installed[/green]" if status == "installed" else "[dim]available[/dim]"
+                status = (
+                    "installed" if entry_id in installed_by_drive[vr] else "available"
+                )
+                marker = (
+                    "[green]installed[/green]"
+                    if status == "installed"
+                    else "[dim]available[/dim]"
+                )
                 console.print(f"    {_esc(str(vr))}: {marker}")
         else:
             error(f"No match for '{query}'")
@@ -476,15 +520,26 @@ def search(
     console.print("  [bold]Available distros:[/bold]")
     if len(target_drives) > 1:
         # Show drive headers
-        drive_labels = [f"D{i+1}" for i in range(len(target_drives))]
-        console.print(f"    {'':3} {'Name':<25} {'Strategy':<20} {' '.join(drive_labels)}")
-        console.print(f"    {'':3} {'-'*25} {'-'*20} {' '.join(['--' for _ in target_drives])}")
+        drive_labels = [f"D{i + 1}" for i in range(len(target_drives))]
+        console.print(
+            f"    {'':3} {'Name':<25} {'Strategy':<20} {' '.join(drive_labels)}"
+        )
+        console.print(
+            f"    {'':3} {'-' * 25} {'-' * 20} {' '.join(['--' for _ in target_drives])}"
+        )
         for drive_status, name, strategy in rows:
-            markers = " ".join(f"[green]{s}[/green]" if s == "+" else f"[dim]{s}[/dim]" for s in drive_status)
+            markers = " ".join(
+                f"[green]{s}[/green]" if s == "+" else f"[dim]{s}[/dim]"
+                for s in drive_status
+            )
             console.print(f"    {'':3} {_esc(name):<25} {_esc(strategy):<20} {markers}")
     else:
         for drive_status, name, strategy in rows:
-            marker = f"[green]{drive_status[0]}[/green]" if drive_status[0] == "+" else f"[dim]{drive_status[0]}[/dim]"
+            marker = (
+                f"[green]{drive_status[0]}[/green]"
+                if drive_status[0] == "+"
+                else f"[dim]{drive_status[0]}[/dim]"
+            )
             console.print(f"    {marker} {_esc(name)} [dim]({_esc(strategy)})[/dim]")
     console.print()
     console.print("  [dim]+ = installed[/dim]")
@@ -527,7 +582,11 @@ def info(
     clean_name = s.get("clean_name", entry_id)
     for vr in target_drives:
         installed = set(get_installed_ids(vr))
-        status = "[green]installed[/green]" if entry_id in installed else "[dim]available[/dim]"
+        status = (
+            "[green]installed[/green]"
+            if entry_id in installed
+            else "[dim]available[/dim]"
+        )
 
         existing = find_installed_isos(vr)
         file_info = "[dim]not on drive[/dim]"
@@ -595,6 +654,7 @@ def autodetect(
             if not entry_id:
                 # Fallback: check if any config keyword appears in the filename
                 from src.finder import keyword_hit
+
                 for eid, s in distros.items():
                     keyword = s.get("keyword", "")
                     if keyword and keyword_hit(keyword, file_lower):
@@ -605,6 +665,7 @@ def autodetect(
 
             # Check if already marked
             from src.pm import get_installed_ids
+
             installed = set(get_installed_ids(ventoy_root))
             if entry_id in installed:
                 continue
@@ -621,11 +682,13 @@ def autodetect(
         if found == 0:
             output_info("No new distros detected (all already registered).")
         else:
-            success(f"{'Would detect' if dry_run else 'Marked'} {found} distro(s) as installed.")
+            success(
+                f"{'Would detect' if dry_run else 'Marked'} {found} distro(s) as installed."
+            )
 
 
-@app.command()
-def list(
+@app.command("list")
+def list_isos(
     config: Path | None = typer.Option(
         None, "--config", "-c", help="Path to config file"
     ),
@@ -685,7 +748,9 @@ def sync(
         False, "--force", "-f", help="Force re-download even if version matches"
     ),
     clean: bool = typer.Option(
-        False, "--clean", help="Remove old versions of the same distro (dry-run by default)"
+        False,
+        "--clean",
+        help="Remove old versions of the same distro (dry-run by default)",
     ),
     all: bool = typer.Option(
         False, "--all", "-a", help="Sync all configured distros (not just installed)"
@@ -694,7 +759,10 @@ def sync(
         False, "--no-verify", help="Skip checksum verification after download"
     ),
     no_staging: bool = typer.Option(
-        False, "--no-staging", "--no-buffer", help="Download directly to the Ventoy drive (skip staging buffer)"
+        False,
+        "--no-staging",
+        "--no-buffer",
+        help="Download directly to the Ventoy drive (skip staging buffer)",
     ),
 ) -> None:
     """Sync installed distros to the Ventoy drive."""
@@ -713,7 +781,9 @@ def sync(
         else:
             only = get_installed_ids(drive_root)
             if not only:
-                output_info("No distros installed. Use 'visync install <name>' or 'visync sync --all'.")
+                output_info(
+                    "No distros installed. Use 'visync install <name>' or 'visync sync --all'."
+                )
                 continue
 
         sync_all_configured_distros(
@@ -801,9 +871,7 @@ def nuke_metadata(
     dry_run: bool = typer.Option(
         False, "--dry-run", "-n", help="Show what would be deleted without deleting"
     ),
-    yes: bool = typer.Option(
-        False, "--yes", "-y", help="Skip confirmation prompt"
-    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:
     """Delete all ISO metadata from .visync/metadata/.
 
@@ -839,13 +907,17 @@ def nuke_metadata(
             continue
 
         if dry_run:
-            output_info(f"Would delete {len(json_files)} metadata file(s) ({total_size / 1024:.1f} KiB):")
+            output_info(
+                f"Would delete {len(json_files)} metadata file(s) ({total_size / 1024:.1f} KiB):"
+            )
             for f in json_files:
                 console.print(f"    [cyan]→[/cyan] {_esc(f.name)}")
             continue
 
         if not yes:
-            console.print(f"  About to delete {len(json_files)} metadata file(s) from {_esc(str(ventoy_root))}:")
+            console.print(
+                f"  About to delete {len(json_files)} metadata file(s) from {_esc(str(ventoy_root))}:"
+            )
             for f in json_files:
                 console.print(f"    [red]×[/red] {_esc(f.name)}")
             try:

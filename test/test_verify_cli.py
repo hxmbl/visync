@@ -40,9 +40,7 @@ class TestExtractIsoMetadata(unittest.TestCase):
         self.assertEqual(meta["version"], "42")
         self.assertEqual(meta["arch"], "x86_64")
         self.assertEqual(meta["variant_dir"], "Workstation")
-        self.assertEqual(
-            meta["checksum_stem"], "Fedora-Workstation-Live-x86_64-42-1.1"
-        )
+        self.assertEqual(meta["checksum_stem"], "Fedora-Workstation-Live-x86_64-42-1.1")
 
     def test_ubuntu_server_iso(self) -> None:
         meta = extract_iso_metadata("ubuntu-24.04.4-live-server-amd64.iso")
@@ -119,8 +117,12 @@ class TestResolveDistroSettings(unittest.TestCase):
         )
 
     def test_exact_clean_name_match(self) -> None:
-        settings = resolve_distro_settings("Arch Linux", "archlinux-2026.iso", self.configs)
-        self.assertEqual(settings.get("checksum_url"), "https://example.com/sha256sums.txt")
+        settings = resolve_distro_settings(
+            "Arch Linux", "archlinux-2026.iso", self.configs
+        )
+        self.assertEqual(
+            settings.get("checksum_url"), "https://example.com/sha256sums.txt"
+        )
 
     def test_keyword_fallback_for_ubuntu_server(self) -> None:
         settings = resolve_distro_settings(
@@ -128,7 +130,9 @@ class TestResolveDistroSettings(unittest.TestCase):
             "ubuntu-24.04-live-server-amd64.iso",
             self.configs,
         )
-        self.assertEqual(settings.get("checksum_url"), "https://example.com/ubuntu/SHA256SUMS")
+        self.assertEqual(
+            settings.get("checksum_url"), "https://example.com/ubuntu/SHA256SUMS"
+        )
 
 
 class TestRunDirectoryVerify(unittest.TestCase):
@@ -207,7 +211,9 @@ class TestVerifyCommand(unittest.TestCase):
 
     @patch("src.main.find_ventoy_drives", return_value=[])
     @patch("src.main.load_config", return_value={})
-    def test_verify_command_no_ventoy(self, _load: MagicMock, _drives: MagicMock) -> None:
+    def test_verify_command_no_ventoy(
+        self, _load: MagicMock, _drives: MagicMock
+    ) -> None:
         result = self.runner.invoke(self.app, ["verify"])
         self.assertEqual(result.exit_code, 1)
         self.assertIn("No Ventoy drives detected", result.stdout + result.stderr)

@@ -1,7 +1,6 @@
 """Unit tests for download module (no network or Ventoy hardware required)."""
 
 import os
-import socket
 import sys
 import tempfile
 import unittest
@@ -13,15 +12,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.download import (
     DEBUG,
-    ping_mirror,
-    _variant_stem,
-    fetch_html,
-    process_scraping_strategy,
-    download_iso,
     _check_distro,
     _cleanup_old_versions,
+    _variant_stem,
+    download_iso,
+    fetch_html,
     find_installed_isos,
     load_config,
+    ping_mirror,
+    process_scraping_strategy,
 )
 
 
@@ -48,8 +47,8 @@ class TestDebugMode(unittest.TestCase):
     @patch.dict(os.environ, {"VISYNC_DEBUG": "1"})
     def test_debug_on_with_env(self):
         _section("Debug Mode: Enabled via ENV")
-        import importlib
         import src.download
+
         old = src.download.DEBUG
         src.download.DEBUG = True
         self.assertTrue(src.download.DEBUG)
@@ -70,7 +69,7 @@ class TestPingMirror(unittest.TestCase):
     @patch("src.download.socket.create_connection")
     def test_ping_timeout(self, mock_conn: MagicMock):
         _section("ping_mirror: Timeout")
-        mock_conn.side_effect = socket.timeout("timed out")
+        mock_conn.side_effect = TimeoutError("timed out")
         result = ping_mirror("https://unreachable.example.com")
         self.assertFalse(result)
         _ok("Returns False on timeout")
@@ -89,7 +88,7 @@ class TestPingMirror(unittest.TestCase):
             mock_conn.return_value.__enter__ = MagicMock(return_value=mock_conn)
             mock_conn.return_value.__exit__ = MagicMock(return_value=False)
             ping_mirror("https://example.com:8443/path")
-            args, kwargs = mock_conn.call_args
+            args, _kwargs = mock_conn.call_args
             self.assertEqual(args[0], ("example.com", 8443))
             _ok("Extracts custom port from URL")
 
@@ -99,7 +98,7 @@ class TestPingMirror(unittest.TestCase):
             mock_conn.return_value.__enter__ = MagicMock(return_value=mock_conn)
             mock_conn.return_value.__exit__ = MagicMock(return_value=False)
             ping_mirror("https://example.com")
-            args, kwargs = mock_conn.call_args
+            args, _kwargs = mock_conn.call_args
             self.assertEqual(args[0], ("example.com", 443))
             _ok("Defaults to port 443 for HTTPS")
 
@@ -109,7 +108,7 @@ class TestPingMirror(unittest.TestCase):
             mock_conn.return_value.__enter__ = MagicMock(return_value=mock_conn)
             mock_conn.return_value.__exit__ = MagicMock(return_value=False)
             ping_mirror("http://example.com")
-            args, kwargs = mock_conn.call_args
+            args, _kwargs = mock_conn.call_args
             self.assertEqual(args[0], ("example.com", 80))
             _ok("Defaults to port 80 for HTTP")
 
@@ -200,7 +199,9 @@ class TestFetchHtml(unittest.TestCase):
 
     @patch("src.download.urllib.request.urlopen")
     @patch("src.download.urllib.request.Request")
-    def test_bot_challenge_detected(self, mock_request: MagicMock, mock_urlopen: MagicMock):
+    def test_bot_challenge_detected(
+        self, mock_request: MagicMock, mock_urlopen: MagicMock
+    ):
         _section("fetch_html: Bot Challenge Detection")
         mock_response = MagicMock()
         mock_response.read.return_value = b"<html>Anubis challenge page</html>"
@@ -216,7 +217,9 @@ class TestFetchHtml(unittest.TestCase):
         self, mock_request: MagicMock, mock_urlopen: MagicMock
     ):
         _section("fetch_html: SSL Error — Auto Skip (Non-Interactive)")
-        mock_urlopen.side_effect = urllib.error.URLError("SSL: CERTIFICATE_VERIFY_FAILED")
+        mock_urlopen.side_effect = urllib.error.URLError(
+            "SSL: CERTIFICATE_VERIFY_FAILED"
+        )
         result = fetch_html("https://example.com")
         self.assertEqual(result, "")
         _ok("SSL error returns empty string without prompting (non-interactive)")
@@ -276,7 +279,9 @@ class TestProcessScrapingStrategy(unittest.TestCase):
 
     @patch("src.download.ping_mirror", return_value=True)
     @patch("src.download.fetch_html")
-    def test_direct_match_not_found(self, mock_fetch_html: MagicMock, mock_ping: MagicMock):
+    def test_direct_match_not_found(
+        self, mock_fetch_html: MagicMock, mock_ping: MagicMock
+    ):
         _section("Strategy: direct_match — Not Found")
         mock_fetch_html.return_value = "<html>no iso here</html>"
         settings = {
@@ -291,7 +296,9 @@ class TestProcessScrapingStrategy(unittest.TestCase):
 
     @patch("src.download.ping_mirror", return_value=True)
     @patch("src.download.fetch_html")
-    def test_fedora_nested_found(self, mock_fetch_html: MagicMock, mock_ping: MagicMock):
+    def test_fedora_nested_found(
+        self, mock_fetch_html: MagicMock, mock_ping: MagicMock
+    ):
         _section("Strategy: fedora_nested — Found")
         mock_fetch_html.side_effect = [
             '<a href="41/">41/</a><a href="42/">42/</a>',
@@ -301,7 +308,7 @@ class TestProcessScrapingStrategy(unittest.TestCase):
             "strategy": "fedora_nested",
             "base_url": "https://example.com/fedora/",
             "version_regex": 'href="([0-9\\.]+)/"',
-            "iso_regex": 'href="(Fedora-Workstation-Live-x86_64-[^\"]+\\.iso)"',
+            "iso_regex": 'href="(Fedora-Workstation-Live-x86_64-[^"]+\\.iso)"',
         }
         name, url = process_scraping_strategy("Fedora", settings)
         self.assertEqual(name, "Fedora-Workstation-Live-x86_64-42-1.1.iso")
@@ -310,7 +317,9 @@ class TestProcessScrapingStrategy(unittest.TestCase):
 
     @patch("src.download.ping_mirror", return_value=True)
     @patch("src.download.fetch_html")
-    def test_ubuntu_nested_found(self, mock_fetch_html: MagicMock, mock_ping: MagicMock):
+    def test_ubuntu_nested_found(
+        self, mock_fetch_html: MagicMock, mock_ping: MagicMock
+    ):
         _section("Strategy: ubuntu_nested — Found")
         mock_fetch_html.side_effect = [
             '<a href="24.04/">24.04/</a><a href="24.10/">24.10/</a>',
@@ -320,7 +329,7 @@ class TestProcessScrapingStrategy(unittest.TestCase):
             "strategy": "ubuntu_nested",
             "base_url": "https://example.com/ubuntu/",
             "version_regex": 'href="([0-9\\.]+)/"',
-            "iso_regex": 'href="(ubuntu-[^\"]+\\.iso)"',
+            "iso_regex": 'href="(ubuntu-[^"]+\\.iso)"',
         }
         name, url = process_scraping_strategy("Ubuntu Server", settings)
         self.assertEqual(name, "ubuntu-24.10-live-server-amd64.iso")
@@ -336,7 +345,7 @@ class TestProcessScrapingStrategy(unittest.TestCase):
             "strategy": "fedora_nested",
             "base_url": "https://example.com/",
             "version_regex": 'href="([0-9\\.]+)/"',
-            "iso_regex": 'href="(Fedora-[^\"]+\\.iso)"',
+            "iso_regex": 'href="(Fedora-[^"]+\\.iso)"',
         }
         name, url = process_scraping_strategy("Fedora", settings)
         self.assertEqual(name, "")
@@ -359,13 +368,17 @@ class TestProcessScrapingStrategy(unittest.TestCase):
 
     @patch("src.download.ping_mirror", return_value=True)
     @patch("src.download.fetch_html")
-    def test_fedora_dl_real_listing(self, mock_fetch_html: MagicMock, mock_ping: MagicMock):
+    def test_fedora_dl_real_listing(
+        self, mock_fetch_html: MagicMock, mock_ping: MagicMock
+    ):
         """Suffix-style names actually served by dl.fedoraproject.org."""
         _section("Strategy: fedora_nested — dl.fedoraproject.org real layout")
         mock_fetch_html.side_effect = [
             '<a href="42/">42/</a><a href="43/">43/</a>',
-            '<a href="?C=N;O=D" href="Fedora-Workstation-43-1.6-x86_64-CHECKSUM"></a>'
-            '<a href="Fedora-Workstation-Live-43-1.6.x86_64.iso">iso</a>',
+            (
+                '<a href="?C=N;O=D" href="Fedora-Workstation-43-1.6-x86_64-CHECKSUM"></a>'
+                '<a href="Fedora-Workstation-Live-43-1.6.x86_64.iso">iso</a>'
+            ),
         ]
         settings = {
             "strategy": "fedora_nested",
@@ -380,13 +393,17 @@ class TestProcessScrapingStrategy(unittest.TestCase):
 
     @patch("src.download.ping_mirror", return_value=True)
     @patch("src.download.fetch_html")
-    def test_fedora_arm_aarch64_tree(self, mock_fetch_html: MagicMock, mock_ping: MagicMock):
+    def test_fedora_arm_aarch64_tree(
+        self, mock_fetch_html: MagicMock, mock_ping: MagicMock
+    ):
         """FedoraARM scrapes the aarch64 subtree and ignores x86_64 lives."""
         _section("Strategy: fedora_nested — FedoraARM aarch64")
         mock_fetch_html.side_effect = [
             '<a href="43/">43/</a>',
-            '<a href="Fedora-Workstation-Live-43-1.6.aarch64.iso">iso</a>'
-            '<a href="Fedora-Workstation-Live-43-1.6.x86_64.iso">wrong-arch</a>',
+            (
+                '<a href="Fedora-Workstation-Live-43-1.6.aarch64.iso">iso</a>'
+                '<a href="Fedora-Workstation-Live-43-1.6.x86_64.iso">wrong-arch</a>'
+            ),
         ]
         settings = {
             "strategy": "fedora_nested",
@@ -412,6 +429,7 @@ class TestProcessScrapingStrategy(unittest.TestCase):
 
 class _FakeResponse:
     """A minimal context-manager response for use with mock urlopen."""
+
     def __init__(self, headers=None, read_data=None):
         self.headers = headers or {}
         self._read_data = read_data or []
@@ -443,9 +461,7 @@ class TestDownloadIso(unittest.TestCase):
 
     @patch("src.download.urllib.request.urlopen")
     @patch("src.download.urllib.request.Request")
-    def test_download_success(
-        self, mock_request: MagicMock, mock_urlopen: MagicMock
-    ):
+    def test_download_success(self, mock_request: MagicMock, mock_urlopen: MagicMock):
         _section("download_iso: Successful Download")
         head_resp = self._mock_head_response(content_length="500")
         get_resp = self._mock_get_response(b"x" * 500, content_length="500")
@@ -523,8 +539,10 @@ class TestDownloadIso(unittest.TestCase):
             distro_cfg = {"checksum_url": "https://example.com/SHA256SUMS"}
             checksums_cfg = {"enabled": True}
             result = download_iso(
-                "https://example.com/test.iso", dest,
-                distro_config=distro_cfg, checksums_config=checksums_cfg,
+                "https://example.com/test.iso",
+                dest,
+                distro_config=distro_cfg,
+                checksums_config=checksums_cfg,
             )
             self.assertTrue(result)
             self.assertTrue(dest.exists())
@@ -548,8 +566,10 @@ class TestDownloadIso(unittest.TestCase):
             distro_cfg = {"checksum_url": "https://example.com/SHA256SUMS"}
             checksums_cfg = {"enabled": True}
             result = download_iso(
-                "https://example.com/test.iso", dest,
-                distro_config=distro_cfg, checksums_config=checksums_cfg,
+                "https://example.com/test.iso",
+                dest,
+                distro_config=distro_cfg,
+                checksums_config=checksums_cfg,
             )
             self.assertFalse(result)
             self.assertFalse(dest.exists())
@@ -572,8 +592,10 @@ class TestDownloadIso(unittest.TestCase):
             distro_cfg = {}
             checksums_cfg = {"enabled": True}
             result = download_iso(
-                "https://example.com/test.iso", dest,
-                distro_config=distro_cfg, checksums_config=checksums_cfg,
+                "https://example.com/test.iso",
+                dest,
+                distro_config=distro_cfg,
+                checksums_config=checksums_cfg,
             )
             self.assertTrue(result)
             self.assertTrue(dest.exists())
@@ -583,9 +605,14 @@ class TestDownloadIso(unittest.TestCase):
 class TestCheckDistro(unittest.TestCase):
     @patch("src.download.find_installed_isos")
     @patch("src.download.process_scraping_strategy")
-    def test_returns_download_when_newer(self, mock_scrape: MagicMock, mock_find: MagicMock):
+    def test_returns_download_when_newer(
+        self, mock_scrape: MagicMock, mock_find: MagicMock
+    ):
         _section("_check_distro: New Version Available")
-        mock_scrape.return_value = ("archlinux-2026.06.01-x86_64.iso", "https://example.com/arch.iso")
+        mock_scrape.return_value = (
+            "archlinux-2026.06.01-x86_64.iso",
+            "https://example.com/arch.iso",
+        )
         mock_find.return_value = [Path("/tmp/archlinux-2025.01.01-x86_64.iso")]
         settings = {"clean_name": "Arch Linux"}
 
@@ -598,7 +625,10 @@ class TestCheckDistro(unittest.TestCase):
     @patch("src.download.process_scraping_strategy")
     def test_returns_up_to_date(self, mock_scrape: MagicMock, mock_find: MagicMock):
         _section("_check_distro: Already Up to Date")
-        mock_scrape.return_value = ("archlinux-2026.06.01-x86_64.iso", "https://example.com/arch.iso")
+        mock_scrape.return_value = (
+            "archlinux-2026.06.01-x86_64.iso",
+            "https://example.com/arch.iso",
+        )
         mock_find.return_value = [Path("/tmp/archlinux-2026.06.01-x86_64.iso")]
         settings = {"clean_name": "Arch Linux"}
 
@@ -608,9 +638,14 @@ class TestCheckDistro(unittest.TestCase):
 
     @patch("src.download.find_installed_isos")
     @patch("src.download.process_scraping_strategy")
-    def test_force_skips_version_check(self, mock_scrape: MagicMock, mock_find: MagicMock):
+    def test_force_skips_version_check(
+        self, mock_scrape: MagicMock, mock_find: MagicMock
+    ):
         _section("_check_distro: --force Skips Version Check")
-        mock_scrape.return_value = ("archlinux-2026.06.01-x86_64.iso", "https://example.com/arch.iso")
+        mock_scrape.return_value = (
+            "archlinux-2026.06.01-x86_64.iso",
+            "https://example.com/arch.iso",
+        )
         mock_find.return_value = [Path("/tmp/archlinux-2026.06.01-x86_64.iso")]
         settings = {"clean_name": "Arch Linux"}
 
@@ -634,7 +669,9 @@ class TestCleanupOldVersions(unittest.TestCase):
             new_iso.write_bytes(b"new")
             old_iso.write_bytes(b"old")
 
-            mock_vid.side_effect = lambda p: "Fedora-KDE-Live-45" if p == new_iso else "Fedora-KDE-Live-44"
+            mock_vid.side_effect = lambda p: (
+                "Fedora-KDE-Live-45" if p == new_iso else "Fedora-KDE-Live-44"
+            )
             mock_id.return_value = "Fedora"
             mock_find.return_value = [new_iso, old_iso]
 
@@ -656,7 +693,9 @@ class TestCleanupOldVersions(unittest.TestCase):
             new_iso.write_bytes(b"new")
             other_iso.write_bytes(b"other")
 
-            mock_vid.side_effect = lambda p: "Fedora-KDE-Live-45" if p == new_iso else "Fedora-Sway-Live-44"
+            mock_vid.side_effect = lambda p: (
+                "Fedora-KDE-Live-45" if p == new_iso else "Fedora-Sway-Live-44"
+            )
             mock_id.return_value = "Fedora"
             mock_find.return_value = [new_iso, other_iso]
 
@@ -718,16 +757,20 @@ class TestNixosChecksumParsing(unittest.TestCase):
             "variant": "minimal",
         }
         # Mock fetch_html to return our canned HTML
-        with patch("src.download.fetch_html", return_value=self.NIXOS_HTML):
-            with patch("src.download.urllib.request.urlopen") as mock_urlopen:
-                mock_resp = MagicMock()
-                mock_resp.status = 200
-                mock_resp.__enter__ = lambda s: s
-                mock_resp.__exit__ = MagicMock(return_value=False)
-                mock_urlopen.return_value = mock_resp
-                filename, url = process_scraping_strategy("NixOS Minimal", settings)
+        with (
+            patch("src.download.fetch_html", return_value=self.NIXOS_HTML),
+            patch("src.download.urllib.request.urlopen") as mock_urlopen,
+        ):
+            mock_resp = MagicMock()
+            mock_resp.status = 200
+            mock_resp.__enter__ = lambda s: s
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            mock_urlopen.return_value = mock_resp
+            filename, url = process_scraping_strategy("NixOS Minimal", settings)
 
-        self.assertEqual(filename, "nixos-minimal-26.05.1947.a0374025a863-x86_64-linux.iso")
+        self.assertEqual(
+            filename, "nixos-minimal-26.05.1947.a0374025a863-x86_64-linux.iso"
+        )
         self.assertIn("releases.nixos.org", url)
         self.assertEqual(
             settings["resolved_checksum"],
@@ -743,14 +786,16 @@ class TestNixosChecksumParsing(unittest.TestCase):
             "base_url": "https://channels.nixos.org/nixos-26.05",
             "variant": "graphical",
         }
-        with patch("src.download.fetch_html", return_value=self.NIXOS_HTML):
-            with patch("src.download.urllib.request.urlopen") as mock_urlopen:
-                mock_resp = MagicMock()
-                mock_resp.status = 200
-                mock_resp.__enter__ = lambda s: s
-                mock_resp.__exit__ = MagicMock(return_value=False)
-                mock_urlopen.return_value = mock_resp
-                filename, url = process_scraping_strategy("NixOS Graphical", settings)
+        with (
+            patch("src.download.fetch_html", return_value=self.NIXOS_HTML),
+            patch("src.download.urllib.request.urlopen") as mock_urlopen,
+        ):
+            mock_resp = MagicMock()
+            mock_resp.status = 200
+            mock_resp.__enter__ = lambda s: s
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            mock_urlopen.return_value = mock_resp
+            filename, _url = process_scraping_strategy("NixOS Graphical", settings)
 
         self.assertIn("nixos-graphical", filename)
         self.assertEqual(
@@ -768,7 +813,7 @@ class TestNixosChecksumParsing(unittest.TestCase):
             "variant": "minimal",
         }
         with patch("src.download.fetch_html", return_value="<html></html>"):
-            filename, url = process_scraping_strategy("NixOS Minimal", settings)
+            filename, _url = process_scraping_strategy("NixOS Minimal", settings)
 
         self.assertEqual(filename, "")
         self.assertNotIn("resolved_checksum", settings)
@@ -788,8 +833,8 @@ class TestChunkedDownload(unittest.TestCase):
         total = len(data)
 
         # Serve it via a simple HTTP handler that supports Range
-        from http.server import HTTPServer, BaseHTTPRequestHandler
         import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
 
         class RangeHandler(BaseHTTPRequestHandler):
             def do_HEAD(self):
@@ -841,9 +886,11 @@ class TestChunkedDownload(unittest.TestCase):
 if __name__ == "__main__":
     print()
     print(f"  {'#' * 62}")
-    print(f"  #   DOWNLOAD MODULE — COMPREHENSIVE TESTS")
+    print("  #   DOWNLOAD MODULE — COMPREHENSIVE TESTS")
     print(f"  {'#' * 62}")
     print()
-    _info("Testing ping, variant stem, fetch, config, strategy, download, cleanup, filtering")
+    _info(
+        "Testing ping, variant stem, fetch, config, strategy, download, cleanup, filtering"
+    )
     print()
     unittest.main(verbosity=2)

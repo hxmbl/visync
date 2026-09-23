@@ -1,0 +1,43 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Full suite + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install project and dev tools
+        run: python -m pip install --quiet -e ".[dev]"
+      - name: Run ruff check
+        run: ruff check .
+      - name: Run ruff format --check
+        run: ruff format --check .
+      - name: Run pyright
+        run: pyright --pythonpath "$(python -c 'import sys; print(sys.executable)')"
+      - name: Run tests with coverage
+        run: pytest
+      - name: Build wheel and sdist
+        run: python -m build
+      - name: Install wheel in clean venv and smoke test
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install --quiet dist/*.whl
+          /tmp/smoke/bin/visync version
+          /tmp/smoke/bin/visync --help
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

@@ -6,7 +6,7 @@ State file: .visync/installed.json
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from src.output import warn
@@ -51,7 +51,7 @@ def mark_installed(drive_root: Path, entry_id: str, version: str = "") -> None:
     """Mark a distro as installed."""
     installed = load_installed(drive_root)
     installed[entry_id] = {
-        "installed_at": datetime.now(timezone.utc).isoformat(),
+        "installed_at": datetime.now(UTC).isoformat(),
         "version": version,
     }
     save_installed(drive_root, installed)
@@ -91,14 +91,16 @@ def matching_distros(query: str, config: dict) -> tuple[str | None, list[str]]:
             return entry_id, []
 
     keyword_hits = [
-        entry_id for entry_id, settings in distros.items()
+        entry_id
+        for entry_id, settings in distros.items()
         if settings.get("keyword", "").lower() == query_lower
     ]
     if len(keyword_hits) == 1:
         return keyword_hits[0], []
 
     partials = [
-        entry_id for entry_id, settings in distros.items()
+        entry_id
+        for entry_id, settings in distros.items()
         if query_lower in settings.get("clean_name", "").lower()
         or query_lower in entry_id.lower()
     ]

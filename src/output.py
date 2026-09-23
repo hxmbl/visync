@@ -87,9 +87,7 @@ def iso_table(rows: list[tuple[str, str, str, str]], total_gb: float) -> None:
         table.add_row(_esc(distro), _esc(version), _esc(size), _esc(filename))
 
     console.print(table)
-    console.print(
-        f"\n  [dim]{len(rows)} ISO(s) — {total_gb:.1f} GiB total[/dim]"
-    )
+    console.print(f"\n  [dim]{len(rows)} ISO(s) — {total_gb:.1f} GiB total[/dim]")
 
 
 def make_download_progress() -> Progress:

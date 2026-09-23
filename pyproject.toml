@@ -6,10 +6,19 @@ build-backend = "hatchling.build"
 name = "visync"
 version = "0.1.0"
 description = "Ventoy ISO Synchronization Tool"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 dependencies = [
     "typer>=0.12",
     "rich>=13.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "build>=1.2",
+    "pyright>=1.1.380",
+    "pytest>=8",
+    "pytest-cov>=5",
+    "ruff>=0.16",
 ]
 
 [project.scripts]
@@ -17,3 +26,25 @@ visync = "src.main:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+ignore = [
+    "B008",  # typer.Option(...) default arguments are the CLI idiom
+    "BLE001",  # deliberate network/disk-tolerant exception handling
+    "S110",  # intentional except-pass while probing connectivity/disk edge cases
+    "S112",  # intentional ignore + manual returncode handling
+    "PLW1510",  # subprocess without check=True; returncode checked explicitly
+]
+
+[tool.pyright]
+include = ["src"]
+typeCheckingMode = "basic"
+pythonVersion = "3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+addopts = "--cov=src --cov-report=term-missing:skip-covered --cov-report=xml --cov-fail-under=70"

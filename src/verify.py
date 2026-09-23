@@ -15,7 +15,6 @@ import subprocess
 import tempfile
 import urllib.request
 from pathlib import Path
-from typing import Optional
 from urllib.request import urlopen
 
 from src.finder import (
@@ -25,8 +24,8 @@ from src.finder import (
     keyword_hit,
     load_all_metadata,
 )
-from src.output import warn
 from src.net import install_safe_opener, require_https
+from src.output import warn
 
 install_safe_opener()
 
@@ -81,7 +80,7 @@ def compare_versions(remote: str, local: str) -> int:
 
 
 _ARCH_TOKEN_RE = re.compile(
-    r"x86[_-]?64|amd64|aarch64|arm64|armhfp|i[36]86|riscv64|x86", re.I
+    r"x86[_-]?64|amd64|aarch64|arm64|armhfp|i[36]86|riscv64|x86", re.IGNORECASE
 )
 _VERSION_TOKEN_RE = re.compile(r"\d+(?:\.\d+)*")
 
@@ -95,7 +94,7 @@ def extract_version_from_filename(filename: str) -> str:
     dotted numeric run for names like 'nixos-minimal-26.05.1947.a037-x86_64-linux.iso'.
     Returns the raw version substring or empty string if no numeric version found.
     """
-    stem = re.sub(r"\.(iso|img)$", "", filename, flags=re.I)
+    stem = re.sub(r"\.(iso|img)$", "", filename, flags=re.IGNORECASE)
     stem = _ARCH_TOKEN_RE.sub("-", stem)
     for token in re.split(r"[\s_\-]+", stem):
         if _VERSION_TOKEN_RE.fullmatch(token):
@@ -131,6 +130,7 @@ def compute_iso_hash(iso_path: Path, algo: str = "sha256") -> str:
 
 # ── Network ────────────────────────────────────────────────────────
 
+
 class ChecksumUnavailable(Exception):
     """Raised when the expected checksum cannot be obtained or evaluated.
 
@@ -152,7 +152,9 @@ def _fetch(url: str) -> str:
 # ── GPG verification ──────────────────────────────────────────────
 
 
-def _import_key_then_verify(signed_path: Path, key_url: str, key_fingerprint: str | list[str] = "") -> bool:
+def _import_key_then_verify(
+    signed_path: Path, key_url: str, key_fingerprint: str | list[str] = ""
+) -> bool:
     if shutil.which("gpg") is None:
         raise ChecksumUnavailable(
             "gpg binary not found — cannot verify the GPG signature "
@@ -166,7 +168,9 @@ def _import_key_then_verify(signed_path: Path, key_url: str, key_fingerprint: st
             with urlopen(req, timeout=30) as resp:
                 key_file.write_bytes(resp.read())
         except Exception as e:
-            raise ChecksumUnavailable(f"signing key unreachable ({key_url}): {e}") from e
+            raise ChecksumUnavailable(
+                f"signing key unreachable ({key_url}): {e}"
+            ) from e
 
         tmpdir = str(key_file.parent)
         import_proc = subprocess.run(
@@ -177,9 +181,17 @@ def _import_key_then_verify(signed_path: Path, key_url: str, key_fingerprint: st
             return False
 
         verify_proc = subprocess.run(
-            ["gpg", "--homedir", tmpdir, "--status-fd", "1",
-             "--verify", str(signed_path)],
-            capture_output=True, text=True,
+            [
+                "gpg",
+                "--homedir",
+                tmpdir,
+                "--status-fd",
+                "1",
+                "--verify",
+                str(signed_path),
+            ],
+            capture_output=True,
+            text=True,
         )
         if verify_proc.returncode != 0:
             return False
@@ -190,7 +202,7 @@ def _import_key_then_verify(signed_path: Path, key_url: str, key_fingerprint: st
                 if "VALIDSIG" not in parts:
                     continue
                 i = parts.index("VALIDSIG")
-                fields = parts[i + 1:]
+                fields = parts[i + 1 :]
                 if not fields:
                     continue
                 # field 1 = fingerprint of the signing key (may be a subkey);
@@ -200,8 +212,10 @@ def _import_key_then_verify(signed_path: Path, key_url: str, key_fingerprint: st
             if not any(w in got for w in wanted):
                 return False
         elif verify_proc.stdout:
-            warn("GPG signature trusted without fingerprint pinning "
-                 "(set signing_key_fingerprint in config)")
+            warn(
+                "GPG signature trusted without fingerprint pinning "
+                "(set signing_key_fingerprint in config)"
+            )
         return True
     finally:
         shutil.rmtree(key_file.parent, ignore_errors=True)
@@ -216,7 +230,7 @@ def _normalize_fingerprints(value: str | list[str]) -> list[str]:
 # ── Checksum-file parsers ─────────────────────────────────────────
 
 
-def parse_gpg_checksum(content: str, iso_name: str) -> Optional[str]:
+def parse_gpg_checksum(content: str, iso_name: str) -> str | None:
     """Parse a GPG-inline-signed CHECKSUM file (e.g. Fedora).
 
     Lines look like:  SHA256 (Fedora-Workstation-...iso) = <hex>
@@ -224,7 +238,9 @@ def parse_gpg_checksum(content: str, iso_name: str) -> Optional[str]:
     for line in content.splitlines():
         line = line.strip()
         m = re.search(
-            r"SHA(?:256|512)\s*\(([^)]*" + re.escape(iso_name) + r"[^)]*)\)\s*=\s*([a-fA-F0-9]{64,128})",
+            r"SHA(?:256|512)\s*\(([^)]*"
+            + re.escape(iso_name)
+            + r"[^)]*)\)\s*=\s*([a-fA-F0-9]{64,128})",
             line,
         )
         if m:
@@ -235,12 +251,11 @@ def parse_gpg_checksum(content: str, iso_name: str) -> Optional[str]:
 def _sums_filename(field: str) -> str:
     """Normalize a SUMS filename field (strip binary-mode '*' prefix)."""
     name = field.strip()
-    if name.startswith("*"):
-        name = name[1:]
+    name = name.removeprefix("*")
     return name
 
 
-def parse_hashsums(content: str, iso_name: str) -> Optional[str]:
+def parse_hashsums(content: str, iso_name: str) -> str | None:
     """Parse a standard *SUMS file (hash  filename)."""
     for line in content.splitlines():
         line = line.strip()
@@ -252,7 +267,7 @@ def parse_hashsums(content: str, iso_name: str) -> Optional[str]:
     return None
 
 
-def parse_tails_json(content: str, iso_name: str = "") -> Optional[str]:
+def parse_tails_json(content: str, iso_name: str = "") -> str | None:
     """Parse Tails latest.json containing a sha256 field."""
     try:
         data = json.loads(content)
@@ -263,9 +278,9 @@ def parse_tails_json(content: str, iso_name: str = "") -> Optional[str]:
 
 FORMAT_PARSERS = {
     "gpg_checksum": parse_gpg_checksum,
-    "sha256sums":   parse_hashsums,
-    "sha1sums":     parse_hashsums,
-    "json":         parse_tails_json,
+    "sha256sums": parse_hashsums,
+    "sha1sums": parse_hashsums,
+    "json": parse_tails_json,
 }
 
 
@@ -277,7 +292,7 @@ def verify_iso(
     checksum_url: str,
     algo: str = "sha256",
     checksum_format: str = "sha256sums",
-    signing_key_url: Optional[str] = None,
+    signing_key_url: str | None = None,
     signing_key_fingerprint: str = "",
     precomputed_hash: str = "",
 ) -> bool:
@@ -304,7 +319,9 @@ def verify_iso(
         with tempfile.TemporaryDirectory() as tmpdir:
             signed = Path(tmpdir) / "CHECKSUM.asc"
             signed.write_text(content)
-            if not _import_key_then_verify(signed, signing_key_url, signing_key_fingerprint):
+            if not _import_key_then_verify(
+                signed, signing_key_url, signing_key_fingerprint
+            ):
                 return False
 
     parser = FORMAT_PARSERS.get(checksum_format)
@@ -313,10 +330,7 @@ def verify_iso(
             f"unknown checksum_format '{checksum_format}' for {iso_name}"
         )
 
-    if checksum_format == "json":
-        expected = parser(content)
-    else:
-        expected = parser(content, iso_name)
+    expected = parser(content, iso_name)
     if not expected:
         raise ChecksumUnavailable(
             f"{iso_name} not listed in {checksum_url} — cannot determine expected hash"
@@ -344,7 +358,7 @@ def extract_iso_metadata(iso_name: str) -> dict[str, str]:
         r"-(?P<major>\d+)-(?P<minor>[\d\.]+)"
         r"(?:\.(?:iso)|\.(?P<ext>x86_64|aarch64|i686|armhfp)\.iso)$",
         iso_name,
-        re.I,
+        re.IGNORECASE,
     )
     if fedora:
         prefix = fedora.group("prefix")
@@ -353,7 +367,7 @@ def extract_iso_metadata(iso_name: str) -> dict[str, str]:
         major = fedora.group("major")
         minor = fedora.group("minor")
         arch = infix or ext or "x86_64"
-        mid = prefix[len("Fedora"):-len("-Live")].lstrip("-")
+        mid = prefix[len("Fedora") : -len("-Live")].lstrip("-")
         if mid.lower().endswith("-desktop"):
             mid = mid[: -len("-Desktop")]
         meta["version"] = major
@@ -368,13 +382,13 @@ def extract_iso_metadata(iso_name: str) -> dict[str, str]:
         return meta
 
     ubuntu = re.match(
-        r"^ubuntu-(\d+\.\d+(?:\.\d+)?)-live-server-amd64\.iso$", iso_name, re.I
+        r"^ubuntu-(\d+\.\d+(?:\.\d+)?)-live-server-amd64\.iso$", iso_name, re.IGNORECASE
     )
     if ubuntu:
         meta["version"] = ubuntu.group(1)
         return meta
 
-    arch = re.match(r"^archlinux-(\d+\.\d+\.\d+)-x86_64\.iso$", iso_name, re.I)
+    arch = re.match(r"^archlinux-(\d+\.\d+\.\d+)-x86_64\.iso$", iso_name, re.IGNORECASE)
     if arch:
         meta["version"] = arch.group(1)
         return meta
@@ -456,7 +470,7 @@ def _cached_hash_for(iso_path: Path, cached: dict[str, dict]) -> str:
 
 def run_directory_verify(
     iso_dir: Path, config: dict
-) -> list[tuple[Path, str, Optional[bool] | str]]:
+) -> list[tuple[Path, str, bool | None | str]]:
     """Identify ISOs under *iso_dir* and verify each against config.
 
     Third element is True (verified), False (mismatch), UNAVAILABLE
@@ -466,7 +480,7 @@ def run_directory_verify(
     distro_configs = index_distro_configs(config)
     checksums_config = config.get("checksums", {})
     cached = load_all_metadata(iso_dir)
-    results: list[tuple[Path, str, Optional[bool] | str]] = []
+    results: list[tuple[Path, str, bool | None | str]] = []
     for iso_path, distro_name in distro_map.values():
         settings = resolve_distro_settings(distro_name, iso_path.name, distro_configs)
         try:
@@ -490,7 +504,7 @@ def verify_from_config(
     distro_config: dict,
     checksums_config: dict,
     precomputed_hash: str = "",
-) -> Optional[bool]:
+) -> bool | None:
     """Verify a single ISO using its distro's checksum configuration.
 
     Returns True/False on success, None if no checksum config is available.
@@ -535,17 +549,19 @@ def verify_all_isos(
     distro_map: dict[str, tuple[Path, str]],
     distro_configs: dict[str, dict],
     checksums_config: dict,
-) -> list[tuple[Path, str, Optional[bool] | str]]:
+) -> list[tuple[Path, str, bool | None | str]]:
     """Verify all ISOs in a directory against their distro's checksums.
 
     *distro_map* maps ISO path string → (iso_path, distro_name).
     Returns list of (iso_path, distro_name, result).
     """
-    results: list[tuple[Path, str, Optional[bool] | str]] = []
+    results: list[tuple[Path, str, bool | None | str]] = []
     for iso_path, distro_name in distro_map.values():
         settings = resolve_distro_settings(distro_name, iso_path.name, distro_configs)
         try:
-            result = verify_from_config(iso_path, distro_name, settings, checksums_config)
+            result = verify_from_config(
+                iso_path, distro_name, settings, checksums_config
+            )
         except ChecksumUnavailable as e:
             warn(f"{iso_path.name} — {e}")
             result = UNAVAILABLE

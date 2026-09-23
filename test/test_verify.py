@@ -140,9 +140,7 @@ class TestParseHashsums(unittest.TestCase):
         self.assertIsNone(result)
 
     def test_binary_mode_asterisk_prefix(self) -> None:
-        content = (
-            "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2  *ubuntu-24.04-live-server-amd64.iso\n"
-        )
+        content = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2  *ubuntu-24.04-live-server-amd64.iso\n"
         result = parse_hashsums(content, "ubuntu-24.04-live-server-amd64.iso")
         self.assertEqual(
             result, "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
@@ -347,7 +345,6 @@ class TestVerifyFromConfig(unittest.TestCase):
 class TestVerifyAllIsos(unittest.TestCase):
     def test_iterates_over_distro_map(self) -> None:
         _section("verify_all_isos: Iteration")
-        iso_dir = Path("/tmp/isos")
         distro_map = {
             "/tmp/isos/a.iso": (Path("/tmp/isos/a.iso"), "Arch Linux"),
             "/tmp/isos/b.iso": (Path("/tmp/isos/b.iso"), "Ubuntu Server"),
@@ -367,7 +364,7 @@ class TestVerifyAllIsos(unittest.TestCase):
 if __name__ == "__main__":
     print()
     print(f"  {'#' * 62}")
-    print(f"  #   VERIFY MODULE — UNIT TESTS")
+    print("  #   VERIFY MODULE — UNIT TESTS")
     print(f"  {'#' * 62}")
     print()
     _info("Testing hash computation, checksum parsers, URL expansion, and verification")

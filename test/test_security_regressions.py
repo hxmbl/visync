@@ -10,8 +10,7 @@ import tempfile
 import threading
 import time
 import unittest
-import urllib.request
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -19,7 +18,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src import download as dl
 from src.download import (
-    _cleanup_old_versions,
     _download_chunked,
     _download_threads,
     _safe_filename,
@@ -38,7 +36,7 @@ def _iso_with_vid(path: Path, volume_id: str, size: int = 40000) -> None:
     """Create a fake ISO with an ISO9660 primary volume descriptor label."""
     buf = bytearray(size)
     label = volume_id.encode("ascii")[:32]
-    buf[ISO_VID_OFFSET:ISO_VID_OFFSET + len(label)] = label
+    buf[ISO_VID_OFFSET : ISO_VID_OFFSET + len(label)] = label
     path.write_bytes(bytes(buf))
 
 
@@ -48,8 +46,12 @@ def _iso_with_vid(path: Path, volume_id: str, size: int = 40000) -> None:
 class TestDryRunGatesClean(unittest.TestCase):
     def _make_drive(self, tmpdir: str) -> Path:
         drive = Path(tmpdir)
-        _iso_with_vid(drive / "archlinux-2025.01.01-x86_64.iso", "ARCH LINUX 2025.01.01 x86_64")
-        _iso_with_vid(drive / "archlinux-2026.08.01-x86_64.iso", "ARCH LINUX 2026.08.01 x86_64")
+        _iso_with_vid(
+            drive / "archlinux-2025.01.01-x86_64.iso", "ARCH LINUX 2025.01.01 x86_64"
+        )
+        _iso_with_vid(
+            drive / "archlinux-2026.08.01-x86_64.iso", "ARCH LINUX 2026.08.01 x86_64"
+        )
         return drive
 
     def _config(self):
@@ -63,13 +65,21 @@ class TestDryRunGatesClean(unittest.TestCase):
     @patch("src.download._check_distro")
     def test_sync_clean_dry_run_deletes_nothing(self, mock_check, _wd):
         """--clean --dry-run reports but keeps both ISOs on disk."""
-        mock_check.return_value = ("ArchLinux", "Arch Linux",
-                                   "archlinux-2026.08.01-x86_64.iso", True, None)
+        mock_check.return_value = (
+            "ArchLinux",
+            "Arch Linux",
+            "archlinux-2026.08.01-x86_64.iso",
+            True,
+            None,
+        )
         with tempfile.TemporaryDirectory() as tmpdir:
             drive = self._make_drive(tmpdir)
             with patch("src.download.load_config", return_value=self._config()):
                 sync_all_configured_distros(
-                    dry_run=True, clean=True, only=["ArchLinux"], drive_override=drive,
+                    dry_run=True,
+                    clean=True,
+                    only=["ArchLinux"],
+                    drive_override=drive,
                     use_buffer=False,
                 )
             self.assertTrue((drive / "archlinux-2025.01.01-x86_64.iso").exists())
@@ -79,13 +89,21 @@ class TestDryRunGatesClean(unittest.TestCase):
     @patch("src.download._check_distro")
     def test_sync_clean_without_dry_run_removes_old(self, mock_check, _wd):
         """--clean (no dry-run) removes only the older version."""
-        mock_check.return_value = ("ArchLinux", "Arch Linux",
-                                   "archlinux-2026.08.01-x86_64.iso", True, None)
+        mock_check.return_value = (
+            "ArchLinux",
+            "Arch Linux",
+            "archlinux-2026.08.01-x86_64.iso",
+            True,
+            None,
+        )
         with tempfile.TemporaryDirectory() as tmpdir:
             drive = self._make_drive(tmpdir)
             with patch("src.download.load_config", return_value=self._config()):
                 sync_all_configured_distros(
-                    dry_run=False, clean=True, only=["ArchLinux"], drive_override=drive,
+                    dry_run=False,
+                    clean=True,
+                    only=["ArchLinux"],
+                    drive_override=drive,
                     use_buffer=False,
                 )
             self.assertFalse((drive / "archlinux-2025.01.01-x86_64.iso").exists())
@@ -107,8 +125,13 @@ class TestDryRunGatesClean(unittest.TestCase):
     @patch("src.download._check_distro")
     def test_sync_dry_run_creates_no_staging_dir(self, mock_check, _wd):
         """--dry-run must not create the staging cache directory."""
-        mock_check.return_value = ("ArchLinux", "Arch Linux",
-                                   "archlinux-2026.08.01-x86_64.iso", False, "https://m/x.iso")
+        mock_check.return_value = (
+            "ArchLinux",
+            "Arch Linux",
+            "archlinux-2026.08.01-x86_64.iso",
+            False,
+            "https://m/x.iso",
+        )
         with tempfile.TemporaryDirectory() as tmpdir:
             staging = Path(tmpdir) / "staging"
             cfg = {
@@ -116,13 +139,19 @@ class TestDryRunGatesClean(unittest.TestCase):
                 "checksums": {"enabled": False},
                 "distros": {"ArchLinux": {"clean_name": "Arch Linux"}},
             }
-            with patch("src.download.load_config", return_value=cfg), \
-                    patch.object(dl, "DEFAULT_STAGING_DIR", staging):
+            with (
+                patch("src.download.load_config", return_value=cfg),
+                patch.object(dl, "DEFAULT_STAGING_DIR", staging),
+            ):
                 sync_all_configured_distros(
-                    dry_run=True, only=["ArchLinux"], drive_override=Path(tmpdir),
+                    dry_run=True,
+                    only=["ArchLinux"],
+                    drive_override=Path(tmpdir),
                     use_buffer=True,
                 )
-            self.assertFalse(staging.exists(), "dry-run must not create the staging dir")
+            self.assertFalse(
+                staging.exists(), "dry-run must not create the staging dir"
+            )
 
 
 # ── C2: chunked downloader rejects truncated / range-ignoring servers ────────
@@ -170,9 +199,14 @@ class TestChunkedIntegrity(unittest.TestCase):
     def test_short_read_detected(self):
         """A cleanly-truncated range must fail the download, not leave holes."""
         data = os.urandom(12 * 1024 * 1024)
-        handler = type("TruncServer", (_RangeServer,), {
-            "data": data, "truncate_at": (4 * 1024 * 1024, 1024 * 1024),
-        })
+        handler = type(
+            "TruncServer",
+            (_RangeServer,),
+            {
+                "data": data,
+                "truncate_at": (4 * 1024 * 1024, 1024 * 1024),
+            },
+        )
         url = self._serve(handler)
         with tempfile.TemporaryDirectory() as tmpdir:
             part = Path(tmpdir) / "x.iso.part"
@@ -220,8 +254,10 @@ class TestChunkedWindowsFallback(unittest.TestCase):
         data = os.urandom(12 * 1024 * 1024)
         handler = type("OkServer", (_RangeServer,), {"data": data})
         url = self._serve(handler)
-        with tempfile.TemporaryDirectory() as tmpdir, \
-                patch.object(dl.os, "pwrite", None, create=True):
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.object(dl.os, "pwrite", None, create=True),
+        ):
             part = Path(tmpdir) / "x.iso.part"
             ok = _download_chunked(url, part, len(data), 3, "x.iso")
             self.assertTrue(ok, "download must succeed without os.pwrite")
@@ -239,6 +275,7 @@ class TestMissingGpgBinary(unittest.TestCase):
     @patch("src.verify.shutil.which", return_value=None)
     def test_import_key_then_verify_raises_checksum_unavailable(self, _mock_which):
         from src.verify import ChecksumUnavailable, _import_key_then_verify
+
         with self.assertRaises(ChecksumUnavailable):
             _import_key_then_verify(
                 Path("/tmp/CHECKSUM"),
@@ -252,15 +289,18 @@ class TestMissingGpgBinary(unittest.TestCase):
         """verify_iso must not raise FileNotFoundError when gpg is missing —
         it should raise ChecksumUnavailable so callers keep the ISO."""
         from src.verify import ChecksumUnavailable, verify_iso
-        _mock_fetch.return_value = "\n".join([
-            "-----BEGIN PGP SIGNED MESSAGE-----",
-            "Hash: SHA256",
-            "",
-            "SHA256 (Fedora.iso) = " + "0" * 64,
-            "-----BEGIN PGP SIGNATURE-----",
-            "sig",
-            "-----END PGP SIGNATURE-----",
-        ])
+
+        _mock_fetch.return_value = "\n".join(
+            [
+                "-----BEGIN PGP SIGNED MESSAGE-----",
+                "Hash: SHA256",
+                "",
+                "SHA256 (Fedora.iso) = " + "0" * 64,
+                "-----BEGIN PGP SIGNATURE-----",
+                "sig",
+                "-----END PGP SIGNATURE-----",
+            ]
+        )
         with self.assertRaises(ChecksumUnavailable):
             verify_iso(
                 Path("/tmp/Fedora.iso"),
@@ -318,16 +358,19 @@ class TestWindowsTextModeCorruption(unittest.TestCase):
                 b = b.replace(b"\n", b"\r\n")  # text-mode write inflation
             return real_write(fd, b)
 
-        with tempfile.TemporaryDirectory() as tmpdir, \
-                patch.object(dl.os, "O_BINARY", fake_binary, create=True), \
-                patch.object(dl.os, "pwrite", None, create=True), \
-                patch.object(dl.os, "open", win_open), \
-                patch.object(dl.os, "write", win_write):
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.object(dl.os, "O_BINARY", fake_binary, create=True),
+            patch.object(dl.os, "pwrite", None, create=True),
+            patch.object(dl.os, "open", win_open),
+            patch.object(dl.os, "write", win_write),
+        ):
             part = Path(tmpdir) / "x.iso.part"
             ok = _download_chunked(url, part, len(payload), 3, "x.iso")
             self.assertTrue(ok, "download must succeed on Windows")
             self.assertEqual(
-                part.read_bytes(), payload,
+                part.read_bytes(),
+                payload,
                 "ISO bytes must survive: text-mode fds would inflate 0x0A -> 0x0D 0x0A",
             )
 
@@ -339,9 +382,7 @@ class TestDownloadKeepsFileWhenChecksumUnavailable(unittest.TestCase):
     @patch("src.verify.verify_from_config")
     @patch("src.download.urllib.request.urlopen")
     @patch("src.download.urllib.request.Request")
-    def test_fetch_failure_keeps_download(
-        self, _req, mock_urlopen, mock_verify
-    ):
+    def test_fetch_failure_keeps_download(self, _req, mock_urlopen, mock_verify):
         head = MagicMock()
         head.headers = {"Content-Length": "500"}
         head.__enter__ = lambda s: s
@@ -359,12 +400,15 @@ class TestDownloadKeepsFileWhenChecksumUnavailable(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             dest = Path(tmpdir) / "test.iso"
             result = download_iso(
-                "https://example.com/test.iso", dest,
+                "https://example.com/test.iso",
+                dest,
                 distro_config={"checksum_url": "https://example.com/SUMS"},
                 checksums_config={"enabled": True},
             )
             self.assertTrue(result, "download itself succeeded; unavailable ≠ mismatch")
-            self.assertTrue(dest.exists(), "file must be kept when checksum unavailable")
+            self.assertTrue(
+                dest.exists(), "file must be kept when checksum unavailable"
+            )
 
 
 class TestDownloadOverwritesExistingDestination(unittest.TestCase):
@@ -398,13 +442,17 @@ class TestDownloadOverwritesExistingDestination(unittest.TestCase):
             dest.write_bytes(b"stale previous download")
             with patch.object(dl.Path, "rename", windows_rename):
                 result = download_iso(
-                    "https://example.com/test.iso", dest,
+                    "https://example.com/test.iso",
+                    dest,
                     distro_config=None,
                     checksums_config=None,
                 )
             self.assertTrue(result)
-            self.assertEqual(dest.read_bytes(), b"x" * 500,
-                             "destination must be replaced, not left stale")
+            self.assertEqual(
+                dest.read_bytes(),
+                b"x" * 500,
+                "destination must be replaced, not left stale",
+            )
 
 
 # ── H2: API strategies stash resolved checksums ──────────────────────────────
@@ -414,32 +462,42 @@ class TestApiResolvedChecksums(unittest.TestCase):
     @patch("src.download.ping_mirror", return_value=True)
     @patch("src.download.fetch_html")
     def test_popos_stashes_sha256(self, mock_fetch, _ping):
-        mock_fetch.return_value = json.dumps({
-            "url": "https://isos.pop-os.org/pop-os.iso",
-            "sha256": "ab" * 32,
-        })
+        mock_fetch.return_value = json.dumps(
+            {
+                "url": "https://isos.pop-os.org/pop-os.iso",
+                "sha256": "ab" * 32,
+            }
+        )
         settings = {"strategy": "popos_api"}
-        name, url = dl.process_scraping_strategy("Pop!_OS", settings)
+        name, _url = dl.process_scraping_strategy("Pop!_OS", settings)
         self.assertEqual(name, "pop-os.iso")
         self.assertEqual(settings.get("resolved_checksum"), "ab" * 32)
 
     @patch("src.download.ping_mirror", return_value=True)
     @patch("src.download.fetch_html")
     def test_tails_stashes_target_sha256(self, mock_fetch, _ping):
-        mock_fetch.return_value = json.dumps({
-            "installations": [{
-                "version": "6.91",
-                "installation-paths": [{
-                    "type": "img",
-                    "target-files": [{
-                        "url": "https://tails.net/tails-amd64-6.91.img",
-                        "sha256": "cd" * 32,
-                    }],
-                }],
-            }],
-        })
+        mock_fetch.return_value = json.dumps(
+            {
+                "installations": [
+                    {
+                        "version": "6.91",
+                        "installation-paths": [
+                            {
+                                "type": "img",
+                                "target-files": [
+                                    {
+                                        "url": "https://tails.net/tails-amd64-6.91.img",
+                                        "sha256": "cd" * 32,
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
         settings = {"strategy": "tails_api", "api_url": "https://x/latest.json"}
-        name, url = dl.process_scraping_strategy("Tails", settings)
+        name, _url = dl.process_scraping_strategy("Tails", settings)
         self.assertEqual(name, "tails-amd64-6.91.img")
         self.assertEqual(settings.get("resolved_checksum"), "cd" * 32)
 
@@ -477,13 +535,16 @@ class TestScrapeDeadline(unittest.TestCase):
         orig_deadline = dl.SCRAPE_DEADLINE
         dl.SCRAPE_DEADLINE = 1
         try:
-            with patch.object(dl, "_check_distro", side_effect=hung_check), \
-                 patch.object(dl, "visync_watchdog"), \
-                 patch.object(dl, "_sweep_old_versions"), \
-                 patch.object(dl, "load_config", return_value=config):
+            with (
+                patch.object(dl, "_check_distro", side_effect=hung_check),
+                patch.object(dl, "visync_watchdog"),
+                patch.object(dl, "_sweep_old_versions"),
+                patch.object(dl, "load_config", return_value=config),
+            ):
                 t0 = time.monotonic()
                 sync_all_configured_distros(
-                    dry_run=True, drive_override=Path(tempfile.gettempdir()),
+                    dry_run=True,
+                    drive_override=Path(tempfile.gettempdir()),
                     use_buffer=False,
                 )
                 elapsed = time.monotonic() - t0
@@ -508,7 +569,9 @@ class TestMarkupEscaping(unittest.TestCase):
         evil = "arch [/bold][red]FAKE ERROR[/red] x.iso"
         for fn in (success, warn, error, info, removed):
             out = self._capture(fn, evil)
-            self.assertIn("[red]", out, f"{fn.__name__} must render tags as literal text")
+            self.assertIn(
+                "[red]", out, f"{fn.__name__} must render tags as literal text"
+            )
 
     def test_osc_link_not_emitted_from_filename(self):
         evil = "a.iso [link=https://evil.example]click[/link]"
@@ -566,6 +629,7 @@ class TestStateRobustness(unittest.TestCase):
 
     def test_save_is_atomic_no_tmp_leftovers(self):
         from src.pm import save_installed
+
         with tempfile.TemporaryDirectory() as tmp:
             drive = Path(tmp)
             save_installed(drive, {"A": {"version": "1"}})
@@ -593,40 +657,58 @@ class TestGpgFingerprintPinning(unittest.TestCase):
                 r.stdout = f"[GNUPG:] VALIDSIG {validsig} 0 0 1 1 1 sha256\n"
             return r
 
-        with patch("src.verify.subprocess.run", side_effect=fake_run), \
-             patch("src.verify.urlopen") as mu, \
-             patch("src.verify.shutil.which", return_value="/usr/bin/gpg"):
+        with (
+            patch("src.verify.subprocess.run", side_effect=fake_run),
+            patch("src.verify.urlopen") as mu,
+            patch("src.verify.shutil.which", return_value="/usr/bin/gpg"),
+        ):
             resp = MagicMock()
             resp.read.return_value = b"-----BEGIN PGP PUBLIC KEY BLOCK-----"
             resp.__enter__ = lambda s: s
             resp.__exit__ = MagicMock(return_value=False)
             mu.return_value = resp
-            return _import_key_then_verify(Path("/tmp/CHECKSUM"), "https://fedoraproject.org/fedora.gpg", pins)
+            return _import_key_then_verify(
+                Path("/tmp/CHECKSUM"), "https://fedoraproject.org/fedora.gpg", pins
+            )
 
     def test_list_pin_matching(self):
-        self.assertTrue(self._run_verify(
-            ["C6E7F081CF80E13146676E88829B606631645531",
-             "36F612DCF27F7D1A48A835E4DBFCF71C6D9F90A6"],
-            "36F612DCF27F7D1A48A835E4DBFCF71C6D9F90A6"))
+        self.assertTrue(
+            self._run_verify(
+                [
+                    "C6E7F081CF80E13146676E88829B606631645531",
+                    "36F612DCF27F7D1A48A835E4DBFCF71C6D9F90A6",
+                ],
+                "36F612DCF27F7D1A48A835E4DBFCF71C6D9F90A6",
+            )
+        )
 
     def test_single_string_pin(self):
-        self.assertTrue(self._run_verify(
-            "4F50A6114CD5C6976A7F1179655A4B02F577861E",
-            "4f50a6114cd5c6976a7f1179655a4b02f577861e"))
+        self.assertTrue(
+            self._run_verify(
+                "4F50A6114CD5C6976A7F1179655A4B02F577861E",
+                "4f50a6114cd5c6976a7f1179655a4b02f577861e",
+            )
+        )
 
     def test_unknown_key_rejected(self):
-        self.assertFalse(self._run_verify(
-            ["C6E7F081CF80E13146676E88829B606631645531"],
-            "DEADBEEF00000000000000000000000000000000"))
+        self.assertFalse(
+            self._run_verify(
+                ["C6E7F081CF80E13146676E88829B606631645531"],
+                "DEADBEEF00000000000000000000000000000000",
+            )
+        )
 
     def test_config_fingerprints_flow_through_config(self):
         from src.finder import load_config
+
         cfg = load_config()
         for entry in ("Fedora", "FedoraKDE", "FedoraARM"):
             s = cfg["distros"][entry]
             pins = s.get("signing_key_fingerprint")
             self.assertIsInstance(pins, list) and None
-            self.assertGreaterEqual(len(pins), 4, f"{entry} should pin the release keys")
+            self.assertGreaterEqual(
+                len(pins), 4, f"{entry} should pin the release keys"
+            )
             self.assertEqual(s["checksum_format"], "gpg_checksum")
             self.assertIn("signing_key_url", s)
 
@@ -672,7 +754,7 @@ class TestChunkOverflow(unittest.TestCase):
                 spec = self.headers.get("Range", "")[6:]
                 s, e = spec.split("-")
                 s, e = int(s), int(e) + 1
-                chunk = payload[s:min(e + 4096, len(payload))]  # 4 KiB extra
+                chunk = payload[s : min(e + 4096, len(payload))]  # 4 KiB extra
                 self.send_response(206)
                 self.send_header("Content-Length", str(len(chunk)))
                 self.end_headers()
@@ -703,18 +785,24 @@ class TestInsecureUrlGracefulSkip(unittest.TestCase):
     def test_http_url_skips_without_crashing(self):
         config = {
             "iso": {},
-            "distros": {"X": {"strategy": "direct_match",
-                              "base_url": "http://insecure.example/"}},
+            "distros": {
+                "X": {
+                    "strategy": "direct_match",
+                    "base_url": "http://insecure.example/",
+                }
+            },
         }
-        with patch.object(dl, "load_config", return_value=config), \
-             patch.object(dl, "visync_watchdog"), \
-             patch.object(dl, "_sweep_old_versions"), \
-             patch.object(dl, "ping_mirror", return_value=True), \
-             patch.object(dl, "fetch_html",
-                          return_value='<a href="evil.iso">x</a>'):
+        with (
+            patch.object(dl, "load_config", return_value=config),
+            patch.object(dl, "visync_watchdog"),
+            patch.object(dl, "_sweep_old_versions"),
+            patch.object(dl, "ping_mirror", return_value=True),
+            patch.object(dl, "fetch_html", return_value='<a href="evil.iso">x</a>'),
+        ):
             # Must not raise; the http:// URL is rejected per-distro
             result = sync_all_configured_distros(
-                dry_run=False, drive_override=Path(tempfile.gettempdir()),
+                dry_run=False,
+                drive_override=Path(tempfile.gettempdir()),
                 use_buffer=False,
             )
         self.assertIsNotNone(result)
@@ -734,9 +822,11 @@ class TestValidSigPrimaryField(unittest.TestCase):
                 r.stdout = stdout
             return r
 
-        with patch("src.verify.subprocess.run", side_effect=fake_run), \
-             patch("src.verify.urlopen") as mu, \
-             patch("src.verify.shutil.which", return_value="/usr/bin/gpg"):
+        with (
+            patch("src.verify.subprocess.run", side_effect=fake_run),
+            patch("src.verify.urlopen") as mu,
+            patch("src.verify.shutil.which", return_value="/usr/bin/gpg"),
+        ):
             resp = MagicMock()
             resp.read.return_value = b"key"
             resp.__enter__ = lambda s: s
@@ -749,18 +839,23 @@ class TestValidSigPrimaryField(unittest.TestCase):
             )
 
     def test_subkey_sig_accepted_via_primary_field(self):
-        stdout = ("[GNUPG:] NEWSIG\n"
-                  "[GNUPG:] KEY_CONSIDERED C6E7F081CF80E13146676E88829B606631645531 0\n"
-                  "[GNUPG:] VALIDSIG AABB00000000000000000000000000000000CCDD "
-                  "2026-01-01 0 pi 1 1 1 01 "
-                  "C6E7F081CF80E13146676E88829B606631645531\n")
-        self.assertTrue(self._run(stdout),
-                        "subkey signer must be accepted via primary-fpr field")
+        stdout = (
+            "[GNUPG:] NEWSIG\n"
+            "[GNUPG:] KEY_CONSIDERED C6E7F081CF80E13146676E88829B606631645531 0\n"
+            "[GNUPG:] VALIDSIG AABB00000000000000000000000000000000CCDD "
+            "2026-01-01 0 pi 1 1 1 01 "
+            "C6E7F081CF80E13146676E88829B606631645531\n"
+        )
+        self.assertTrue(
+            self._run(stdout), "subkey signer must be accepted via primary-fpr field"
+        )
 
     def test_wrong_primary_rejected(self):
-        stdout = ("[GNUPG:] VALIDSIG AABB00000000000000000000000000000000CCDD "
-                  "2026-01-01 0 pi 1 1 1 01 "
-                  "DEAD00000000000000000000000000000000BEEF\n")
+        stdout = (
+            "[GNUPG:] VALIDSIG AABB00000000000000000000000000000000CCDD "
+            "2026-01-01 0 pi 1 1 1 01 "
+            "DEAD00000000000000000000000000000000BEEF\n"
+        )
         self.assertFalse(self._run(stdout))
 
 
@@ -805,7 +900,7 @@ class TestWatchdogSkipsNonJson(unittest.TestCase):
 
     def test_watchdog_over_limit_wipes_but_only_visync(self):
         """Stage-2 wipe removes .visync contents but nothing outside it."""
-        from src.finder import visync_watchdog, VISYNC_SIZE_LIMIT
+        from src.finder import VISYNC_SIZE_LIMIT, visync_watchdog
 
         with tempfile.TemporaryDirectory() as tmp:
             drive = Path(tmp)

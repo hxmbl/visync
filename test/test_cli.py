@@ -7,11 +7,12 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import typer
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from typer.testing import CliRunner
 
-from src.main import app, _get_drives
+from src.main import _get_drives, app
 
 runner = CliRunner()
 
@@ -68,7 +69,9 @@ class TestInstall(unittest.TestCase):
     @patch("src.main.get_iso_volume_id", side_effect=_mock_get_vid)
     @patch("src.main.find_installed_isos", side_effect=_mock_find_installed)
     @patch("src.main.load_config")
-    def test_install_unknown_distro_fails(self, mock_cfg: MagicMock, *_: MagicMock) -> None:
+    def test_install_unknown_distro_fails(
+        self, mock_cfg: MagicMock, *_: MagicMock
+    ) -> None:
         mock_cfg.return_value = MOCK_CONFIG
         with tempfile.TemporaryDirectory() as tmpdir:
             result = runner.invoke(app, ["install", "bogus-distro", "--drive", tmpdir])
@@ -77,14 +80,16 @@ class TestInstall(unittest.TestCase):
 
     @patch("src.main.find_installed_isos", side_effect=_mock_find_installed)
     def test_install_dry_run_does_not_download(self, _mock: MagicMock) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("src.main.load_config", return_value=MOCK_CONFIG):
-                result = runner.invoke(
-                    app, ["install", "archlinux", "--drive", tmpdir, "--dry-run"]
-                )
-                self.assertEqual(result.exit_code, 0)
-                self.assertIn("Would download", result.stdout)
-                self.assertEqual(list(Path(tmpdir).glob("*.iso")), [])
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch("src.main.load_config", return_value=MOCK_CONFIG),
+        ):
+            result = runner.invoke(
+                app, ["install", "archlinux", "--drive", tmpdir, "--dry-run"]
+            )
+            self.assertEqual(result.exit_code, 0)
+            self.assertIn("Would download", result.stdout)
+            self.assertEqual(list(Path(tmpdir).glob("*.iso")), [])
 
     @patch("src.main.find_installed_isos", side_effect=_mock_find_installed)
     @patch("src.main.load_config")
@@ -121,9 +126,7 @@ class TestInstall(unittest.TestCase):
     @patch("src.main.get_iso_volume_id", side_effect=_mock_get_vid)
     @patch("src.main.find_installed_isos", side_effect=_mock_find_installed)
     @patch("src.main.load_config")
-    def test_install_already_on_drive(
-        self, mock_cfg: MagicMock, *_: MagicMock
-    ) -> None:
+    def test_install_already_on_drive(self, mock_cfg: MagicMock, *_: MagicMock) -> None:
         mock_cfg.return_value = MOCK_CONFIG
         with tempfile.TemporaryDirectory() as tmpdir:
             iso = Path(tmpdir) / "archlinux-2026.iso"
@@ -147,7 +150,8 @@ class TestInstall(unittest.TestCase):
             pkg_file.write_text("# comment\n\narchlinux\n\n# another comment\n")
             with patch("src.main.load_config", return_value=MOCK_CONFIG):
                 result = runner.invoke(
-                    app, ["install", "-i", str(pkg_file), "--drive", tmpdir, "--dry-run"]
+                    app,
+                    ["install", "-i", str(pkg_file), "--drive", tmpdir, "--dry-run"],
                 )
                 self.assertEqual(result.exit_code, 0)
                 self.assertIn("Would download 1 distro(s)", result.stdout)
@@ -159,7 +163,8 @@ class TestInstall(unittest.TestCase):
             pkg_file.write_text("archlinux\nubuntuserver\n")
             with patch("src.main.load_config", return_value=MOCK_CONFIG):
                 result = runner.invoke(
-                    app, ["install", "-i", str(pkg_file), "--drive", tmpdir, "--dry-run"]
+                    app,
+                    ["install", "-i", str(pkg_file), "--drive", tmpdir, "--dry-run"],
                 )
                 self.assertEqual(result.exit_code, 0)
                 self.assertIn("Would download 2 distro(s)", result.stdout)
@@ -190,7 +195,9 @@ class TestRemove(unittest.TestCase):
     @patch("src.main.get_iso_volume_id", side_effect=_mock_get_vid)
     @patch("src.main.find_installed_isos", side_effect=_mock_find_installed)
     @patch("src.main.load_config")
-    def test_remove_unknown_distro_fails(self, mock_cfg: MagicMock, *_: MagicMock) -> None:
+    def test_remove_unknown_distro_fails(
+        self, mock_cfg: MagicMock, *_: MagicMock
+    ) -> None:
         mock_cfg.return_value = MOCK_CONFIG
         with tempfile.TemporaryDirectory() as tmpdir:
             result = runner.invoke(app, ["remove", "bogus-distro", "--drive", tmpdir])
@@ -212,7 +219,9 @@ class TestRemove(unittest.TestCase):
     @patch("src.main.get_iso_volume_id", side_effect=_mock_get_vid)
     @patch("src.main.find_installed_isos", side_effect=_mock_find_installed)
     @patch("src.main.load_config")
-    def test_remove_dry_run_does_not_delete(self, mock_cfg: MagicMock, *_: MagicMock) -> None:
+    def test_remove_dry_run_does_not_delete(
+        self, mock_cfg: MagicMock, *_: MagicMock
+    ) -> None:
         mock_cfg.return_value = MOCK_CONFIG
         with tempfile.TemporaryDirectory() as tmpdir:
             iso = Path(tmpdir) / "archlinux-2026.iso"
@@ -235,7 +244,9 @@ class TestRemove(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             iso = Path(tmpdir) / "archlinux-2026.iso"
             iso.write_bytes(b"\x00" * 1024)
-            result = runner.invoke(app, ["remove", "archlinux", "--drive", tmpdir, "--yes"])
+            result = runner.invoke(
+                app, ["remove", "archlinux", "--drive", tmpdir, "--yes"]
+            )
             self.assertEqual(result.exit_code, 0)
             self.assertFalse(iso.exists(), "File should be deleted")
             self.assertIn("removed", result.stdout)
@@ -305,11 +316,13 @@ class TestUpdate(unittest.TestCase):
     @patch("src.main.find_ventoy_drives", return_value=[Path("/tmp")])
     @patch("src.main.load_config")
     def test_update_no_installed(self, *_: MagicMock) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("src.main.find_ventoy_drives", return_value=[Path(tmpdir)]):
-                result = runner.invoke(app, ["update"])
-                self.assertEqual(result.exit_code, 0)
-                self.assertIn("No distros installed", result.stdout)
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch("src.main.find_ventoy_drives", return_value=[Path(tmpdir)]),
+        ):
+            result = runner.invoke(app, ["update"])
+            self.assertEqual(result.exit_code, 0)
+            self.assertIn("No distros installed", result.stdout)
 
     def test_update_has_flags(self) -> None:
         result = runner.invoke(app, ["update", "--help"])
@@ -432,9 +445,7 @@ class TestAutodetect(unittest.TestCase):
     @patch("src.main.extract_version_from_filename", return_value="2026")
     @patch("src.main.identify_distro", side_effect=_mock_identify_distro)
     @patch("src.main.load_config")
-    def test_autodetect_registers_iso(
-        self, mock_cfg: MagicMock, *_: MagicMock
-    ) -> None:
+    def test_autodetect_registers_iso(self, mock_cfg: MagicMock, *_: MagicMock) -> None:
         mock_cfg.return_value = MOCK_CONFIG
         with tempfile.TemporaryDirectory() as tmpdir:
             iso = Path(tmpdir) / "archlinux-2026.iso"
@@ -446,7 +457,9 @@ class TestAutodetect(unittest.TestCase):
     @patch("src.pm.get_installed_ids", return_value=["ArchLinux"])
     @patch("src.pm.mark_installed")
     @patch("src.main.load_config")
-    def test_autodetect_skips_already_registered(self, mock_cfg: MagicMock, *_: MagicMock) -> None:
+    def test_autodetect_skips_already_registered(
+        self, mock_cfg: MagicMock, *_: MagicMock
+    ) -> None:
         """autodetect does not re-register already tracked distros."""
         mock_cfg.return_value = MOCK_CONFIG
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -499,11 +512,13 @@ class TestSync(unittest.TestCase):
     @patch("src.main.find_ventoy_drives", return_value=[Path("/tmp")])
     @patch("src.main.load_config", return_value=MOCK_CONFIG)
     def test_sync_no_installed(self, *_: MagicMock) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("src.main.find_ventoy_drives", return_value=[Path(tmpdir)]):
-                result = runner.invoke(app, ["sync"])
-                self.assertEqual(result.exit_code, 0)
-                self.assertIn("No distros installed", result.stdout)
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch("src.main.find_ventoy_drives", return_value=[Path(tmpdir)]),
+        ):
+            result = runner.invoke(app, ["sync"])
+            self.assertEqual(result.exit_code, 0)
+            self.assertIn("No distros installed", result.stdout)
 
     def test_sync_has_flags(self) -> None:
         result = runner.invoke(app, ["sync", "--help"])
@@ -552,7 +567,9 @@ class TestNukeMetadata(unittest.TestCase):
             meta_dir.mkdir(parents=True)
             (meta_dir / "arch.iso.json").write_text("{}")
             (meta_dir / "ubuntu.iso.json").write_text("{}")
-            result = runner.invoke(app, ["nuke-metadata", "--drive", tmpdir, "--dry-run"])
+            result = runner.invoke(
+                app, ["nuke-metadata", "--drive", tmpdir, "--dry-run"]
+            )
             self.assertEqual(result.exit_code, 0)
             self.assertIn("Would delete", result.stdout)
             self.assertTrue((meta_dir / "arch.iso.json").exists())
@@ -639,11 +656,15 @@ class TestFlagConsistency(unittest.TestCase):
 
     def test_autodetect_consistency(self) -> None:
         for flag in ["--config", "--drive", "--dry-run"]:
-            self.assertIn(flag, self._get_options("autodetect"), f"autodetect missing {flag}")
+            self.assertIn(
+                flag, self._get_options("autodetect"), f"autodetect missing {flag}"
+            )
 
     def test_read_commands_no_dry_run(self) -> None:
         for cmd in ["search", "info", "list", "verify", "version"]:
-            self.assertNotIn("--dry-run", self._get_options(cmd), f"{cmd} should not have --dry-run")
+            self.assertNotIn(
+                "--dry-run", self._get_options(cmd), f"{cmd} should not have --dry-run"
+            )
 
     def test_read_commands_have_config_and_drive(self) -> None:
         for cmd in ["search", "info", "list", "verify"]:
@@ -660,8 +681,15 @@ class TestShortFlags(unittest.TestCase):
 
     def test_c_is_config(self) -> None:
         for cmd in [
-            "install", "remove", "update", "search", "info",
-            "list", "sync", "verify", "autodetect",
+            "install",
+            "remove",
+            "update",
+            "search",
+            "info",
+            "list",
+            "sync",
+            "verify",
+            "autodetect",
         ]:
             opts = self._get_options(cmd)
             self.assertIn("--config", opts)
@@ -669,8 +697,15 @@ class TestShortFlags(unittest.TestCase):
 
     def test_d_is_drive(self) -> None:
         for cmd in [
-            "install", "remove", "update", "search", "info",
-            "list", "sync", "verify", "autodetect",
+            "install",
+            "remove",
+            "update",
+            "search",
+            "info",
+            "list",
+            "sync",
+            "verify",
+            "autodetect",
         ]:
             opts = self._get_options(cmd)
             self.assertIn("--drive", opts)
@@ -707,10 +742,12 @@ class TestGetDrives(unittest.TestCase):
 
     def test_single_drive_returns_it(self) -> None:
         """With one detected drive, returns it without prompting."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("src.main.find_ventoy_drives", return_value=[Path(tmpdir)]):
-                result = _get_drives()
-                self.assertEqual(result, [Path(tmpdir)])
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch("src.main.find_ventoy_drives", return_value=[Path(tmpdir)]),
+        ):
+            result = _get_drives()
+            self.assertEqual(result, [Path(tmpdir)])
 
     def test_explicit_drive_flag_bypasses_detection(self) -> None:
         """When --drive is provided, detection is skipped entirely."""
@@ -726,8 +763,7 @@ class TestGetDrives(unittest.TestCase):
     @patch("src.main.find_ventoy_drives")
     def test_multiple_drives_prompts_user(self, mock_drives: MagicMock) -> None:
         """With multiple drives, prompts user to select."""
-        with tempfile.TemporaryDirectory() as d1, \
-             tempfile.TemporaryDirectory() as d2:
+        with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
             mock_drives.return_value = [Path(d1), Path(d2)]
             # Simulate user entering "1"
             with patch("src.main.typer.prompt", return_value="1"):
@@ -737,8 +773,7 @@ class TestGetDrives(unittest.TestCase):
     @patch("src.main.find_ventoy_drives")
     def test_multiple_drives_second_choice(self, mock_drives: MagicMock) -> None:
         """With multiple drives, user can select the second one."""
-        with tempfile.TemporaryDirectory() as d1, \
-             tempfile.TemporaryDirectory() as d2:
+        with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
             mock_drives.return_value = [Path(d1), Path(d2)]
             with patch("src.main.typer.prompt", return_value="2"):
                 result = _get_drives()
@@ -747,8 +782,7 @@ class TestGetDrives(unittest.TestCase):
     @patch("src.main.find_ventoy_drives")
     def test_multiple_drives_select_multiple(self, mock_drives: MagicMock) -> None:
         """With multiple drives, user can select more than one."""
-        with tempfile.TemporaryDirectory() as d1, \
-             tempfile.TemporaryDirectory() as d2:
+        with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
             mock_drives.return_value = [Path(d1), Path(d2)]
             with patch("src.main.typer.prompt", return_value="1,2"):
                 result = _get_drives()
@@ -757,8 +791,7 @@ class TestGetDrives(unittest.TestCase):
     @patch("src.main.find_ventoy_drives")
     def test_multiple_drives_retries_on_invalid(self, mock_drives: MagicMock) -> None:
         """Invalid selection retries prompt until valid."""
-        with tempfile.TemporaryDirectory() as d1, \
-             tempfile.TemporaryDirectory() as d2:
+        with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
             mock_drives.return_value = [Path(d1), Path(d2)]
             # First call returns invalid ("0"), second returns valid ("1")
             with patch("src.main.typer.prompt", side_effect=["0", "1"]):
@@ -769,15 +802,19 @@ class TestGetDrives(unittest.TestCase):
     def test_multiple_drives_abort_exits(self, mock_drives: MagicMock) -> None:
         """User abort (Ctrl+C) during prompt exits cleanly."""
         mock_drives.return_value = [Path("/tmp/a"), Path("/tmp/b")]
-        with patch("src.main.typer.prompt", side_effect=typer.Abort()):
-            with self.assertRaises(typer.Exit):
-                _get_drives()
+        with (
+            patch("src.main.typer.prompt", side_effect=typer.Abort()),
+            self.assertRaises(typer.Exit),
+        ):
+            _get_drives()
 
     def test_no_drives_exits(self) -> None:
         """No drives detected exits with error."""
-        with patch("src.main.find_ventoy_drives", return_value=[]):
-            with self.assertRaises(typer.Exit):
-                _get_drives()
+        with (
+            patch("src.main.find_ventoy_drives", return_value=[]),
+            self.assertRaises(typer.Exit),
+        ):
+            _get_drives()
 
 
 if __name__ == "__main__":

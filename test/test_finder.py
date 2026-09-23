@@ -60,10 +60,10 @@ def _make_fake_iso(tmpdir: Path, volume_id: str) -> Path:
     buf = bytearray()
     buf.extend(b"\x00" * 32768)  # system area (sectors 0-15)
     # Primary Volume Descriptor at offset 32768
-    buf.append(1)                      # type (1 = Primary)
-    buf.extend(b"CD001")              # standard identifier
-    buf.append(1)                      # version
-    buf.extend(b"\x00" * 33)          # pad to offset 32808
+    buf.append(1)  # type (1 = Primary)
+    buf.extend(b"CD001")  # standard identifier
+    buf.append(1)  # version
+    buf.extend(b"\x00" * 33)  # pad to offset 32808
     # Volume identifier at offset 32808 (32 bytes)
     vol_bytes = volume_id.encode("ascii", errors="ignore").ljust(32, b"\x00")[:32]
     buf.extend(vol_bytes)
@@ -87,7 +87,7 @@ class TestFindVentoyDrives(unittest.TestCase):
 
     def test_returns_all_detected_drives(self) -> None:
         """find_ventoy_drives returns all detected drives (no longer defaults to first)."""
-        pass  # relies on environment — validated by integration test
+        # relies on environment — validated by integration test
 
 
 class TestInstalledIsos(unittest.TestCase):
@@ -201,7 +201,7 @@ class TestFindInstalledIsos(unittest.TestCase):
 if __name__ == "__main__":
     print()
     print(f"  {'#' * 62}")
-    print(f"  #   FINDER MODULE — INTEGRATION TESTS")
+    print("  #   FINDER MODULE — INTEGRATION TESTS")
     print(f"  {'#' * 62}")
     print()
 

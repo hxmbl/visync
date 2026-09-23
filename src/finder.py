@@ -10,7 +10,7 @@ import json
 import os
 import re
 import tomllib
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from rich.markup import escape as _escape
@@ -73,14 +73,14 @@ def load_config(config_path: Path | None = None) -> dict:
 def _mount_device(dev: str, detected: list[Path]) -> None:
     """Try to mount a device temporarily and add its path if successful."""
     import subprocess
-
     import tempfile
 
     mount_dir = Path(tempfile.mkdtemp(prefix="ventoy_"))
     try:
         subprocess.run(
             ["mount", dev, str(mount_dir)],
-            capture_output=True, timeout=10,
+            capture_output=True,
+            timeout=10,
         )
         if mount_dir.is_dir() and any(mount_dir.iterdir()):
             detected.append(mount_dir)
@@ -89,6 +89,7 @@ def _mount_device(dev: str, detected: list[Path]) -> None:
     finally:
         if not detected or not mount_dir.is_dir() or not any(mount_dir.iterdir()):
             import shutil
+
             shutil.rmtree(mount_dir, ignore_errors=True)
 
 
@@ -99,7 +100,9 @@ def _udisksctl_mount(dev: str) -> Path | None:
     try:
         result = subprocess.run(
             ["udisksctl", "mount", "-b", dev],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
         if result.returncode == 0:
             # Output: "Mounted /dev/sdX1 at /run/media/$USER/Ventoy"
@@ -110,7 +113,9 @@ def _udisksctl_mount(dev: str) -> Path | None:
             # Localized/unexpected output: ask the system where it landed
             findmnt = subprocess.run(
                 ["findmnt", "-rn", "-o", "TARGET", "--source", dev],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             if findmnt.returncode == 0 and findmnt.stdout.strip():
                 return Path(findmnt.stdout.strip().splitlines()[0])
@@ -191,7 +196,9 @@ def find_ventoy_drives() -> list[Path]:
                     dev = blkid_proc.stdout.strip()
                     mnt_proc = subprocess.run(
                         ["findmnt", "-n", "-o", "TARGET", dev],
-                        capture_output=True, text=True, timeout=10,
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
                     )
                     if mnt_proc.returncode == 0 and mnt_proc.stdout.strip():
                         detected_paths.append(Path(mnt_proc.stdout.strip()))
@@ -334,7 +341,8 @@ def identify_distro(volume_id: str, file_name: str) -> str:
 def find_installed_isos(directory: Path) -> list[Path]:
     """Find all ISO/IMG files under the given directory, ignoring macOS resource forks and .visync metadata."""
     return [
-        p for p in directory.rglob("*")
+        p
+        for p in directory.rglob("*")
         if p.suffix.lower() in (".iso", ".img")
         and not p.name.startswith("._")
         and ".visync" not in p.parts
@@ -385,7 +393,7 @@ def write_iso_metadata(
         "version": version,
         "sha256": sha256,
         "size": size,
-        "sync_timestamp": datetime.now(timezone.utc).isoformat(),
+        "sync_timestamp": datetime.now(UTC).isoformat(),
     }
     try:
         tmp_file = meta_file.with_suffix(".json.tmp")
@@ -393,7 +401,9 @@ def write_iso_metadata(
             json.dump(manifest, f, indent=2)
         os.replace(tmp_file, meta_file)
     except OSError as e:
-        console.print(f"  [yellow]⚠[/yellow] Could not write metadata for {_escape(filename)}: {_escape(str(e))}")
+        console.print(
+            f"  [yellow]⚠[/yellow] Could not write metadata for {_escape(filename)}: {_escape(str(e))}"
+        )
 
 
 def remove_iso_metadata(drive_root: Path, filename: str) -> None:
@@ -473,8 +483,7 @@ def _guard_visync_path(target: Path) -> None:
         )
     if not target.is_dir():
         raise ValueError(
-            f"SAFETY BLOCK: refusing to wipe '{target}' — "
-            f"target is not a directory."
+            f"SAFETY BLOCK: refusing to wipe '{target}' — target is not a directory."
         )
     # Ensure it's a direct child, not a traversal to root
     if target == target.parent:
@@ -516,24 +525,35 @@ def visync_watchdog(drive_root: Path) -> None:
         if size <= VISYNC_SIZE_LIMIT:
             return
 
-        console.print(f"  [yellow]⚠[/yellow] Watchdog: .visync/ is {size / (1024**2):.1f} MiB (limit: 1 GiB). Running deep clean...")
+        console.print(
+            f"  [yellow]⚠[/yellow] Watchdog: .visync/ is {size / (1024**2):.1f} MiB (limit: 1 GiB). Running deep clean..."
+        )
         _deep_clean_metadata(drive_root)
 
         size_after = _dir_size(visync_dir)
         if size_after <= VISYNC_SIZE_LIMIT:
-            console.print(f"  [green]✓[/green] Deep clean recovered space. .visync/ now {size_after / (1024**2):.1f} MiB.")
+            console.print(
+                f"  [green]✓[/green] Deep clean recovered space. .visync/ now {size_after / (1024**2):.1f} MiB."
+            )
             return
 
         # GUARDRAIL: Validate target before any recursive deletion
         _guard_visync_path(visync_dir)
 
-        console.print(f"  [yellow]⚠[/yellow] Watchdog: .visync/ still {size_after / (1024**2):.1f} MiB after deep clean. Wiping entirely.")
+        console.print(
+            f"  [yellow]⚠[/yellow] Watchdog: .visync/ still {size_after / (1024**2):.1f} MiB after deep clean. Wiping entirely."
+        )
         import shutil
+
         try:
             shutil.rmtree(visync_dir)
-            console.print("  [green]✓[/green] .visync/ wiped. Metadata will rebuild on next sync.")
+            console.print(
+                "  [green]✓[/green] .visync/ wiped. Metadata will rebuild on next sync."
+            )
         except OSError as e:
-            console.print(f"  [yellow]⚠[/yellow] Could not wipe .visync/: {_escape(str(e))}")
+            console.print(
+                f"  [yellow]⚠[/yellow] Could not wipe .visync/: {_escape(str(e))}"
+            )
     except ValueError:
         raise
     except Exception as e:
@@ -570,11 +590,15 @@ def _deep_clean_metadata(drive_root: Path) -> None:
                     meta_file.unlink()
                     removed += 1
                 except OSError as e:
-                    console.print(f"  [yellow]⚠[/yellow] Could not remove {_escape(meta_file.name)}: {_escape(str(e))}")
+                    console.print(
+                        f"  [yellow]⚠[/yellow] Could not remove {_escape(meta_file.name)}: {_escape(str(e))}"
+                    )
         if removed:
             console.print(f"  [dim]Removed {removed} orphaned metadata file(s).[/dim]")
         if skipped_non_json:
-            console.print(f"  [yellow]⚠[/yellow] Skipped {skipped_non_json} non-metadata file(s) in .visync/metadata/.")
+            console.print(
+                f"  [yellow]⚠[/yellow] Skipped {skipped_non_json} non-metadata file(s) in .visync/metadata/."
+            )
     except ValueError:
         raise
     except Exception as e:

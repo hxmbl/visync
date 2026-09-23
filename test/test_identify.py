@@ -74,9 +74,11 @@ class TestIdentifyDistro(unittest.TestCase):
 if __name__ == "__main__":
     print()
     print(f"  {'#' * 62}")
-    print(f"  #   IDENTIFY MODULE — DISTRO DETECTION TESTS")
+    print("  #   IDENTIFY MODULE — DISTRO DETECTION TESTS")
     print(f"  {'#' * 62}")
     print()
-    _info("Testing cascading identification layers (vol ID → fork → standalone → fallback)")
+    _info(
+        "Testing cascading identification layers (vol ID → fork → standalone → fallback)"
+    )
     print()
     unittest.main(verbosity=2)

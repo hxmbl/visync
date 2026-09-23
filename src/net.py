@@ -18,7 +18,10 @@ class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
     """HTTPRedirectHandler that refuses to follow https -> cleartext redirects."""
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        if urlparse(req.full_url).scheme == "https" and urlparse(newurl).scheme != "https":
+        if (
+            urlparse(req.full_url).scheme == "https"
+            and urlparse(newurl).scheme != "https"
+        ):
             raise urllib.error.URLError(
                 f"blocked insecure redirect downgrade: {req.full_url} -> {newurl}"
             )
@@ -30,9 +33,7 @@ def install_safe_opener() -> None:
     global _opener_installed
     if _opener_installed:
         return
-    urllib.request.install_opener(
-        urllib.request.build_opener(SafeRedirectHandler())
-    )
+    urllib.request.install_opener(urllib.request.build_opener(SafeRedirectHandler()))
     _opener_installed = True
 
 
@@ -40,6 +41,4 @@ def require_https(url: str, what: str = "URL") -> None:
     """Reject non-HTTPS fetch targets (loopback exempt for local testing)."""
     parsed = urlparse(url)
     if parsed.scheme != "https" and not _is_loopback(parsed.hostname):
-        raise ValueError(
-            f"refusing {what} over non-HTTPS: {url}"
-        )
+        raise ValueError(f"refusing {what} over non-HTTPS: {url}")

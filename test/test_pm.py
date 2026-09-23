@@ -9,18 +9,18 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from src.finder import load_config
 from src.pm import (
+    get_installed_ids,
     load_installed,
-    save_installed,
     mark_installed,
     mark_removed,
-    get_installed_ids,
     resolve_distro,
+    save_installed,
 )
-from src.finder import load_config
-
 
 # ── Helpers ──────────────────────────────────────────────────────
+
 
 def _make_drive(tmpdir: Path) -> Path:
     """Create a fake Ventoy drive with .visync directory."""
@@ -45,6 +45,7 @@ def _write_installed(drive: Path, data: dict) -> None:
 
 
 # ── State Management Tests ──────────────────────────────────────
+
 
 class TestStateManagement(unittest.TestCase):
     def test_load_installed_empty(self):
@@ -74,7 +75,9 @@ class TestStateManagement(unittest.TestCase):
         """save_installed persists data that load_installed reads back."""
         with tempfile.TemporaryDirectory() as tmp:
             drive = _make_drive(Path(tmp))
-            data = {"NixOS": {"version": "26.05", "installed_at": "2026-06-20T00:00:00"}}
+            data = {
+                "NixOS": {"version": "26.05", "installed_at": "2026-06-20T00:00:00"}
+            }
             save_installed(drive, data)
             loaded = load_installed(drive)
             self.assertEqual(loaded, data)
@@ -117,10 +120,13 @@ class TestStateManagement(unittest.TestCase):
         """get_installed_ids returns list of entry IDs."""
         with tempfile.TemporaryDirectory() as tmp:
             drive = _make_drive(Path(tmp))
-            _write_installed(drive, {
-                "ArchLinux": {"version": "2026.06.01"},
-                "NixOS": {"version": "26.05"},
-            })
+            _write_installed(
+                drive,
+                {
+                    "ArchLinux": {"version": "2026.06.01"},
+                    "NixOS": {"version": "26.05"},
+                },
+            )
             ids = get_installed_ids(drive)
             self.assertIn("ArchLinux", ids)
             self.assertIn("NixOS", ids)
@@ -135,6 +141,7 @@ class TestStateManagement(unittest.TestCase):
 
 
 # ── Distro Resolution Tests ─────────────────────────────────────
+
 
 class TestResolveDistro(unittest.TestCase):
     def setUp(self):
@@ -189,11 +196,14 @@ class TestResolveDistro(unittest.TestCase):
 
 # ── CLI Command Tests ───────────────────────────────────────────
 
+
 class TestSearchCommand(unittest.TestCase):
     def setUp(self):
         from src.main import app
+
         self.app = app
         from typer.testing import CliRunner
+
         self.runner = CliRunner()
 
     @patch("src.main.find_ventoy_drives")
@@ -240,8 +250,10 @@ class TestSearchCommand(unittest.TestCase):
 class TestInfoCommand(unittest.TestCase):
     def setUp(self):
         from src.main import app
+
         self.app = app
         from typer.testing import CliRunner
+
         self.runner = CliRunner()
 
     @patch("src.main.find_ventoy_drives")
@@ -277,8 +289,10 @@ class TestInfoCommand(unittest.TestCase):
 class TestAutodetectCommand(unittest.TestCase):
     def setUp(self):
         from src.main import app
+
         self.app = app
         from typer.testing import CliRunner
+
         self.runner = CliRunner()
 
     @patch("src.main.find_ventoy_drives")
@@ -323,8 +337,10 @@ class TestAutodetectCommand(unittest.TestCase):
 class TestRemoveCommand(unittest.TestCase):
     def setUp(self):
         from src.main import app
+
         self.app = app
         from typer.testing import CliRunner
+
         self.runner = CliRunner()
 
     @patch("src.main.find_ventoy_drives")
@@ -335,7 +351,10 @@ class TestRemoveCommand(unittest.TestCase):
             mock_drives.return_value = [drive]
             _make_iso(drive, "archlinux-2026.06.01-x86_64.iso")
             _write_installed(drive, {"ArchLinux": {"version": "2026.06.01"}})
-            with patch("src.main.get_iso_volume_id", return_value="Arch Linux 2026.06.01 x86_64"):
+            with patch(
+                "src.main.get_iso_volume_id",
+                return_value="Arch Linux 2026.06.01 x86_64",
+            ):
                 result = self.runner.invoke(self.app, ["remove", "archlinux", "--yes"])
             self.assertEqual(result.exit_code, 0)
             self.assertFalse((drive / "archlinux-2026.06.01-x86_64.iso").exists())
@@ -355,11 +374,14 @@ class TestRemoveCommand(unittest.TestCase):
 
 # ── Sync Filtering Tests ────────────────────────────────────────
 
+
 class TestSyncFiltering(unittest.TestCase):
     def setUp(self):
         from src.main import app
+
         self.app = app
         from typer.testing import CliRunner
+
         self.runner = CliRunner()
 
     @patch("src.main.find_ventoy_drives")
@@ -387,10 +409,12 @@ class TestSyncFiltering(unittest.TestCase):
 
 # ── .img File Support Tests ─────────────────────────────────────
 
+
 class TestImgFileSupport(unittest.TestCase):
     def test_find_installed_isos_finds_img(self):
         """find_installed_isos finds .img files."""
         from src.finder import find_installed_isos
+
         with tempfile.TemporaryDirectory() as tmp:
             drive = Path(tmp)
             _make_iso(drive, "tails-amd64-7.9.img")
@@ -403,6 +427,7 @@ class TestImgFileSupport(unittest.TestCase):
     def test_find_installed_isos_skips_visync(self):
         """find_installed_isos ignores .visync directory."""
         from src.finder import find_installed_isos
+
         with tempfile.TemporaryDirectory() as tmp:
             drive = Path(tmp)
             visync = drive / ".visync"
@@ -416,6 +441,7 @@ class TestImgFileSupport(unittest.TestCase):
     def test_find_installed_isos_skips_resource_forks(self):
         """find_installed_isos ignores macOS resource forks."""
         from src.finder import find_installed_isos
+
         with tempfile.TemporaryDirectory() as tmp:
             drive = Path(tmp)
             _make_iso(drive, "archlinux-2026.06.01-x86_64.iso")
@@ -426,10 +452,12 @@ class TestImgFileSupport(unittest.TestCase):
 
 # ── Clean Flag Tests ────────────────────────────────────────────
 
+
 class TestCleanFlag(unittest.TestCase):
     def test_sweep_dry_run_by_default(self):
         """_sweep_old_versions dry-runs without clean flag."""
         from src.download import _sweep_old_versions
+
         with tempfile.TemporaryDirectory() as tmp:
             drive = Path(tmp)
             # Create two "versions" of same distro
@@ -443,6 +471,7 @@ class TestCleanFlag(unittest.TestCase):
     def test_sweep_clean_removes_old(self):
         """_sweep_old_versions with clean=True removes old versions."""
         from src.download import _sweep_old_versions
+
         with tempfile.TemporaryDirectory() as tmp:
             drive = Path(tmp)
             _make_iso(drive, "tails-amd64-7.7.img")
@@ -455,11 +484,13 @@ class TestCleanFlag(unittest.TestCase):
 
 # ── Download Failure Handling Tests ─────────────────────────────
 
+
 class TestDownloadFailure(unittest.TestCase):
     @patch("src.download.shutil.disk_usage")
     def test_download_returns_false_on_no_space(self, mock_disk):
         """download_iso returns False when disk space is insufficient."""
         from src.download import download_iso
+
         mock_disk.return_value = MagicMock(free=100)  # 100 bytes free
         with tempfile.TemporaryDirectory() as tmp:
             dest = Path(tmp) / "test.iso"
@@ -472,6 +503,7 @@ class TestDownloadFailure(unittest.TestCase):
     def test_download_returns_true_on_success(self, mock_urlopen, mock_disk):
         """download_iso returns True on successful download."""
         from src.download import download_iso
+
         mock_disk.return_value = MagicMock(free=10 * 1024**3)  # 10GB free
         # Mock HEAD request for size check
         head_resp = MagicMock()

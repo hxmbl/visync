@@ -22,9 +22,9 @@ from src.finder import (
     get_iso_volume_id,
     identify_distro,
     load_config,
-    write_iso_metadata,
     remove_iso_metadata,
     visync_watchdog,
+    write_iso_metadata,
 )
 from src.net import install_safe_opener, require_https
 
@@ -69,7 +69,7 @@ def ping_mirror(url: str) -> bool:
         with socket.create_connection((host, port), timeout=MIRROR_CONNECT_TIMEOUT):
             _debug(f"Ping OK: {host}:{port}")
             return True
-    except (socket.timeout, OSError) as e:
+    except (TimeoutError, OSError) as e:
         _debug(f"Ping failed: {e}")
         return False
 
@@ -84,7 +84,9 @@ def fetch_html(url: str) -> str:
             html = response.read().decode("utf-8", errors="ignore")
             # Detect bot-protected pages (e.g. Anubis proof-of-work)
             if "Anubis" in html[:1000]:
-                warn("Mirror protected by bot challenge (Anubis). Cannot scrape automatically.")
+                warn(
+                    "Mirror protected by bot challenge (Anubis). Cannot scrape automatically."
+                )
                 warn("Visit the URL in a browser, complete the challenge, then re-run.")
                 return ""
             return html
@@ -113,8 +115,9 @@ def _safe_filename(name: str) -> str:
 def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
     """Resolve specific folder parsing pipelines based on the configured strategy."""
     strategy = settings.get("strategy")
-    base_url = settings.get("base_url")
-    iso_regex = settings.get("iso_regex")
+    base_url = str(settings.get("base_url") or "")
+    iso_regex = str(settings.get("iso_regex") or "")
+    version_regex = str(settings.get("version_regex") or "")
 
     # Pre-flight connectivity check — skip dead mirrors instantly
     if base_url and not ping_mirror(base_url):
@@ -123,6 +126,9 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
 
     # Strategy A: Direct Index File Tracking (e.g. Arch Linux)
     if strategy == "direct_match":
+        if not base_url or not iso_regex:
+            warn(f"{name} — direct_match requires base_url and iso_regex")
+            return "", ""
         html = fetch_html(base_url)
         if not html:
             return "", ""
@@ -133,12 +139,15 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
 
     # Strategy B: Two-Tier Version Directory Traversal for Fedora
     elif strategy == "fedora_nested":
+        if not base_url or not iso_regex or not version_regex:
+            warn(f"{name} — fedora_nested requires base_url, iso_regex, version_regex")
+            return "", ""
         root_html = fetch_html(base_url)
         if not root_html:
             return "", ""
         versions = [
             v.strip().rstrip("/")
-            for v in re.findall(settings.get("version_regex"), root_html)
+            for v in re.findall(version_regex, root_html)
             if v.strip().rstrip("/")
         ]
         if not versions:
@@ -147,7 +156,7 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
         versions.sort(key=lambda x: parse_version(x) or ())
         latest_version = versions[-1].rstrip("/")
 
-        variant_path = settings.get("variant_path", "Workstation/x86_64/iso")
+        variant_path = str(settings.get("variant_path") or "Workstation/x86_64/iso")
         iso_dir_url = f"{base_url}{latest_version}/{variant_path}/"
         iso_html = fetch_html(iso_dir_url)
         if not iso_html:
@@ -159,12 +168,15 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
 
     # Strategy C: Directory Sub-paths for Ubuntu Ecosystem Releases
     elif strategy == "ubuntu_nested":
+        if not base_url or not iso_regex or not version_regex:
+            warn(f"{name} — ubuntu_nested requires base_url, iso_regex, version_regex")
+            return "", ""
         root_html = fetch_html(base_url)
         if not root_html:
             return "", ""
         versions = [
             v.strip().rstrip("/")
-            for v in re.findall(settings.get("version_regex"), root_html)
+            for v in re.findall(version_regex, root_html)
             if v.strip().rstrip("/")
         ]
         if not versions:
@@ -184,19 +196,26 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
 
     # Strategy D: NixOS channel page — parse version, construct ISO URL
     elif strategy == "nixos_channel":
+        if not base_url:
+            warn(f"{name} — nixos_channel requires base_url")
+            return "", ""
         html = fetch_html(base_url)
         if not html:
             return "", ""
 
         # The channel page contains text like "nixos-26.05 release nixos-26.05.1947.a0374025a863"
-        version_match = re.search(r"nixos-[\d\.]+\s+release\s+(nixos-[\d\.]+\.[a-f0-9]+)", html)
+        version_match = re.search(
+            r"nixos-[\d\.]+\s+release\s+(nixos-[\d\.]+\.[a-f0-9]+)", html
+        )
         if not version_match:
             warn(f"{name} — could not parse NixOS version from channel page")
             return "", ""
 
         full_version = version_match.group(1)  # e.g. "nixos-26.05.1947.a0374025a863"
         # Strip the "nixos-" prefix for constructing URLs
-        version_id = full_version.replace("nixos-", "", 1)  # e.g. "26.05.1947.a0374025a863"
+        version_id = full_version.replace(
+            "nixos-", "", 1
+        )  # e.g. "26.05.1947.a0374025a863"
         # Extract the short version (e.g. "26.05") from the full version
         short_version_match = re.search(r"nixos-([\d]+\.[\d]+)", full_version)
         if not short_version_match:
@@ -210,7 +229,9 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
         # Parse SHA-256 checksum from the channel page HTML table.
         # The page has rows: <td><a href='...'>FILENAME</a></td><td>SIZE</td><td><tt>HASH</tt></td>
         checksum_match = re.search(
-            r"href=['\"][^'\"]*" + re.escape(iso_filename) + r"['\"]>"
+            r"href=['\"][^'\"]*"
+            + re.escape(iso_filename)
+            + r"['\"]>"
             + re.escape(iso_filename)
             + r"</a></td><td[^>]*>\d+</td><td><tt>([a-f0-9]{64})</tt>",
             html,
@@ -221,7 +242,9 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
         # Verify the URL is reachable
         try:
             require_https(iso_url, "ISO download")
-            req = urllib.request.Request(iso_url, method="HEAD", headers={"User-Agent": "Mozilla/5.0"})
+            req = urllib.request.Request(
+                iso_url, method="HEAD", headers={"User-Agent": "Mozilla/5.0"}
+            )
             with urllib.request.urlopen(req, timeout=MIRROR_HTTP_TIMEOUT) as resp:
                 if resp.status == 200:
                     return iso_filename, iso_url
@@ -252,7 +275,9 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
                     warn(f"{name} — API returned unsafe filename")
                     return "", ""
                 checksum = data.get("sha256", "")
-                if isinstance(checksum, str) and re.fullmatch(r"[a-fA-F0-9]{64}", checksum):
+                if isinstance(checksum, str) and re.fullmatch(
+                    r"[a-fA-F0-9]{64}", checksum
+                ):
                     settings["resolved_checksum"] = checksum.lower()
                 return iso_filename, iso_url
         except (_json.JSONDecodeError, KeyError):
@@ -264,7 +289,9 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
     elif strategy == "tails_api":
         import json as _json
 
-        api_url = settings.get("api_url", "https://tails.net/install/v2/Tails/amd64/stable/latest.json")
+        api_url = settings.get(
+            "api_url", "https://tails.net/install/v2/Tails/amd64/stable/latest.json"
+        )
         file_type = settings.get("file_type", "img")  # "iso" or "img"
 
         html = fetch_html(api_url)
@@ -292,7 +319,9 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
                                 warn(f"{name} — API returned unsafe filename")
                                 return "", ""
                             checksum = target.get("sha256", "")
-                            if isinstance(checksum, str) and re.fullmatch(r"[a-fA-F0-9]{64}", checksum):
+                            if isinstance(checksum, str) and re.fullmatch(
+                                r"[a-fA-F0-9]{64}", checksum
+                            ):
                                 settings["resolved_checksum"] = checksum.lower()
                             return iso_filename, url
         except (_json.JSONDecodeError, KeyError, IndexError):
@@ -347,7 +376,9 @@ def _download_chunked(
         start = end + 1
 
     actual_threads = len(ranges)
-    _debug(f"Chunked download: {total} bytes in {actual_threads} chunks of ~{chunk_size} bytes")
+    _debug(
+        f"Chunked download: {total} bytes in {actual_threads} chunks of ~{chunk_size} bytes"
+    )
 
     # Pre-allocate the file. O_BINARY is required on Windows — without it the
     # CRT opens in text mode and os.write() inflates every 0x0A into 0x0D 0x0A,
@@ -388,7 +419,7 @@ def _download_chunked(
                 while True:
                     try:
                         data = resp.read(128000)
-                    except socket.timeout:
+                    except TimeoutError:
                         with lock:
                             errors.append(f"Chunk {idx} stalled")
                         return
@@ -405,6 +436,7 @@ def _download_chunked(
                     if pwrite_available:
                         written = os.pwrite(fd, data, offset)
                     else:
+                        assert thread_fd is not None
                         os.lseek(thread_fd, offset, os.SEEK_SET)
                         written = os.write(thread_fd, data)
                     offset += written
@@ -412,7 +444,9 @@ def _download_chunked(
                         downloaded[idx] = offset - chunk_start
                     if written < len(data):
                         with lock:
-                            errors.append(f"Chunk {idx}: short write ({written} of {len(data)})")
+                            errors.append(
+                                f"Chunk {idx}: short write ({written} of {len(data)})"
+                            )
                         return
         except Exception as e:
             with lock:
@@ -423,8 +457,12 @@ def _download_chunked(
 
     try:
         with make_download_progress() as progress:
-            task = progress.add_task("download", filename=_esc(filename), total=total or None)
-            with concurrent.futures.ThreadPoolExecutor(max_workers=actual_threads) as pool:
+            task = progress.add_task(
+                "download", filename=_esc(filename), total=total or None
+            )
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=actual_threads
+            ) as pool:
                 futures = [
                     pool.submit(_download_chunk, i, s, e)
                     for i, (s, e) in enumerate(ranges)
@@ -480,7 +518,7 @@ def _download_single_stream(
                     while True:
                         try:
                             chunk = resp.read(CHUNK_SIZE)
-                        except socket.timeout:
+                        except TimeoutError:
                             error(f"Download stalled — no data for {READ_TIMEOUT}s")
                             part_path.unlink(missing_ok=True)
                             return False
@@ -515,9 +553,13 @@ def download_iso(
     """
     _debug(f"Starting download: {url} -> {dest_path}")
     if drive_root and dest_path.parent != drive_root:
-        console.print(f"  [cyan]↓[/cyan] Downloading to staging: [bold]{_esc(dest_path.name)}[/bold]")
+        console.print(
+            f"  [cyan]↓[/cyan] Downloading to staging: [bold]{_esc(dest_path.name)}[/bold]"
+        )
     else:
-        console.print(f"  [cyan]↓[/cyan] Downloading: [bold]{_esc(dest_path.name)}[/bold]")
+        console.print(
+            f"  [cyan]↓[/cyan] Downloading: [bold]{_esc(dest_path.name)}[/bold]"
+        )
 
     require_https(url, "ISO download")
 
@@ -525,7 +567,9 @@ def download_iso(
     expected = 0
     ranges_supported = False
     try:
-        req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "Mozilla/5.0"})
+        req = urllib.request.Request(
+            url, method="HEAD", headers={"User-Agent": "Mozilla/5.0"}
+        )
         with urllib.request.urlopen(req, timeout=10) as resp:
             expected = int(resp.headers.get("Content-Length", 0))
             accept_ranges = resp.headers.get("Accept-Ranges", "")
@@ -539,7 +583,9 @@ def download_iso(
         available = usage.free
         if expected > 0:
             needed = int(expected * 1.05)
-            info(f"Expected: {expected / (1024**3):.2f} GiB | Available: {available / (1024**3):.2f} GiB")
+            info(
+                f"Expected: {expected / (1024**3):.2f} GiB | Available: {available / (1024**3):.2f} GiB"
+            )
             if available < needed:
                 error(
                     f"Insufficient disk space — need {needed / (1024**3):.2f} GiB, "
@@ -610,10 +656,14 @@ def download_iso(
         # Auto-verify checksum if config is available
         if not no_verify and distro_config and checksums_config is not None:
             from src.verify import ChecksumUnavailable, verify_from_config
+
             spin_update(f"Verifying checksum for {dest_path.name}...")
             try:
                 result = verify_from_config(
-                    dest_path, "", distro_config, checksums_config,
+                    dest_path,
+                    "",
+                    distro_config,
+                    checksums_config,
                     precomputed_hash=sha256_hex,
                 )
             except ChecksumUnavailable as e:
@@ -687,7 +737,9 @@ def _cleanup_old_versions(new_iso: Path, drive_root: Path | None = None) -> None
                 # Quick filename-based filter: same distro prefix
                 old_name_lower = iso_path.name.lower()
                 # Check if filename starts with the same stem prefix
-                if new_stem_lower and not old_name_lower.startswith(new_stem_lower.split("-")[0]):
+                if new_stem_lower and not old_name_lower.startswith(
+                    new_stem_lower.split("-")[0]
+                ):
                     continue
 
                 # Confirm match by reading volume ID only for candidates
@@ -741,7 +793,7 @@ def _sweep_old_versions(drive_root: Path, clean: bool = False) -> None:
         if len(versions) <= 1:
             continue
         versions.sort(key=lambda x: parse_version(x[0]) or ())
-        newest_version, newest_path = versions[-1]
+        _newest_version, _newest_path = versions[-1]
         for version, iso_path in versions[:-1]:
             if clean:
                 try:
@@ -772,7 +824,9 @@ def _variant_stem(volume_id: str) -> str:
     # Temporarily protect architecture names that contain underscores
     # (e.g. x86_64) by replacing the underscore with a placeholder
     protected = volume_id
-    arch_patterns = _re.findall(r"\b(x86_\d+|amd\d+|i\d86|arm\w*)\b", volume_id, _re.I)
+    arch_patterns = _re.findall(
+        r"\b(x86_\d+|amd\d+|i\d86|arm\w*)\b", volume_id, _re.IGNORECASE
+    )
     for arch in arch_patterns:
         safe_arch = arch.replace("_", "\ue000")
         protected = protected.replace(arch, safe_arch, 1)
@@ -790,7 +844,7 @@ def _variant_stem(volume_id: str) -> str:
 
     stem = "".join(cleaned)
     stem = stem.replace("\ue000", "_")
-    stem = _re.sub(r"\b(lts|esd|point)\b", "", stem, flags=_re.I)
+    stem = _re.sub(r"\b(lts|esd|point)\b", "", stem, flags=_re.IGNORECASE)
     stem = _re.sub(r"[\s\-]+", "-", stem).strip(" -_")
     return stem.lower()
 
@@ -804,7 +858,7 @@ def _filename_variant_key(filename: str) -> str:
     """
     from src.verify import _ARCH_TOKEN_RE
 
-    stem = re.sub(r"\.(iso|img)$", "", filename, flags=re.I)
+    stem = re.sub(r"\.(iso|img)$", "", filename, flags=re.IGNORECASE)
     stem = _ARCH_TOKEN_RE.sub("-", stem)
     tokens = []
     for token in re.split(r"[\s_\-]+", stem.lower()):
@@ -816,7 +870,9 @@ def _filename_variant_key(filename: str) -> str:
     return "-".join(tokens)
 
 
-def _check_distro(entry_id: str, settings: dict, ventoy_root: Path, force: bool = False) -> tuple[str, str, str, bool, str | None]:
+def _check_distro(
+    entry_id: str, settings: dict, ventoy_root: Path, force: bool = False
+) -> tuple[str, str, str, bool, str | None]:
     """Scrape and version-check a single distro. Returns metadata for download decisions."""
     clean_name = settings.get("clean_name", entry_id)
     _debug(f"Checking {clean_name} (force={force})")
@@ -832,7 +888,9 @@ def _check_distro(entry_id: str, settings: dict, ventoy_root: Path, force: bool 
     # Exact filename match — already up to date (skip check if --force).
     # Case-insensitive: Ventoy drives are typically FAT/exFAT (case-insensitive),
     # so 'Arch' and 'arch' are the same file there.
-    if not force and any(f.name.lower() == latest_filename.lower() for f in local_ventoy_files):
+    if not force and any(
+        f.name.lower() == latest_filename.lower() for f in local_ventoy_files
+    ):
         success(f"{clean_name} is up to date")
         return entry_id, clean_name, latest_filename, True, None
 
@@ -845,14 +903,17 @@ def _check_distro(entry_id: str, settings: dict, ventoy_root: Path, force: bool 
     if not force:
         remote_key = _filename_variant_key(latest_filename)
         same_distro = [
-            f for f in local_ventoy_files
+            f
+            for f in local_ventoy_files
             if extract_version_from_filename(f.name)
             and _filename_variant_key(f.name) == remote_key
         ]
         if same_distro:
             best_local = max(
                 same_distro,
-                key=lambda f: parse_version(extract_version_from_filename(f.name)) or (0,),
+                key=lambda f: (
+                    parse_version(extract_version_from_filename(f.name)) or (0,)
+                ),
             )
             local_version = extract_version_from_filename(best_local.name)
             comparison = compare_versions(remote_version, local_version)
@@ -877,7 +938,9 @@ def _copy_with_progress(src: Path, dst: Path, filename: str) -> None:
     """
     total = src.stat().st_size
     with make_download_progress() as progress:
-        task = progress.add_task("copy to drive", filename=_esc(filename), total=total or None)
+        task = progress.add_task(
+            "copy to drive", filename=_esc(filename), total=total or None
+        )
         copied = 0
         with open(src, "rb") as rf, open(dst, "wb") as wf:
             while True:
@@ -917,7 +980,9 @@ def sync_all_configured_distros(
     If *drive_override* is provided, use that as the Ventoy root.
     Set *use_buffer* to False to download directly to the Ventoy drive.
     """
-    _debug(f"sync_all_configured_distros(dry_run={dry_run}, force={force}, clean={clean}, only={only})")
+    _debug(
+        f"sync_all_configured_distros(dry_run={dry_run}, force={force}, clean={clean}, only={only})"
+    )
     config = load_config(config_path)
     distro_scrapers = config.get("distros", {})
     iso_settings = config.get("iso", {})
@@ -940,7 +1005,9 @@ def sync_all_configured_distros(
 
     config_download_dir = iso_settings.get("download_dir", "").strip()
     if use_buffer:
-        download_target_dir = Path(config_download_dir) if config_download_dir else DEFAULT_STAGING_DIR
+        download_target_dir = (
+            Path(config_download_dir) if config_download_dir else DEFAULT_STAGING_DIR
+        )
         if not dry_run:
             download_target_dir.mkdir(parents=True, exist_ok=True)
         info(f"Buffer staging → {download_target_dir}")
@@ -960,7 +1027,9 @@ def sync_all_configured_distros(
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=len(distro_scrapers))
     try:
         future_map = {
-            executor.submit(_check_distro, entry_id, settings, ventoy_root, force): entry_id
+            executor.submit(
+                _check_distro, entry_id, settings, ventoy_root, force
+            ): entry_id
             for entry_id, settings in distro_scrapers.items()
         }
         deadline = time.monotonic() + SCRAPE_DEADLINE
@@ -977,7 +1046,9 @@ def sync_all_configured_distros(
             )
             for future in done:
                 try:
-                    entry_id, clean_name, latest_filename, up_to_date, download_url = future.result()
+                    entry_id, _clean_name, latest_filename, up_to_date, download_url = (
+                        future.result()
+                    )
                 except (TimeoutError, ConnectionResetError, OSError) as e:
                     error(f"{future_map[future]}: {e}")
                     continue
@@ -1010,7 +1081,8 @@ def sync_all_configured_distros(
             distro_cfg = distro_scrapers.get(entry_id, {})
             try:
                 ok = download_iso(
-                    download_url, dest,
+                    download_url,
+                    dest,
                     drive_root=ventoy_root,
                     distro_config=distro_cfg,
                     checksums_config=checksums_config,
@@ -1051,9 +1123,13 @@ def sync_all_configured_distros(
                         drive_dest.unlink(missing_ok=True)
                     except OSError as unlink_err:
                         if unlink_err.errno == 30:
-                            warn(f"Drive became read-only (unplugged?), skipping cleanup of {drive_dest}")
+                            warn(
+                                f"Drive became read-only (unplugged?), skipping cleanup of {drive_dest}"
+                            )
                         else:
-                            warn(f"Could not remove partial file {drive_dest}: {unlink_err}")
+                            warn(
+                                f"Could not remove partial file {drive_dest}: {unlink_err}"
+                            )
                     continue
                 try:
                     dest.unlink(missing_ok=True)
@@ -1069,7 +1145,9 @@ if __name__ == "__main__":
     try:
         sync_all_configured_distros()
     except KeyboardInterrupt:
-        console.print("\n[red]✕ Sync canceled by user. Cleaning up partial downloads...[/red]")
+        console.print(
+            "\n[red]✕ Sync canceled by user. Cleaning up partial downloads...[/red]"
+        )
         _config = load_config()
         _iso_settings = _config.get("iso", {})
         _cleanup_targets: list[Path] = []

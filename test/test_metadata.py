@@ -62,12 +62,15 @@ class TestWriteIsoMetadata(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             drive = Path(tmpdir)
             write_iso_metadata(
-                drive, "archlinux-2026.06.01-x86_64.iso",
+                drive,
+                "archlinux-2026.06.01-x86_64.iso",
                 variant_stem="archlinux-x86_64",
                 version="2026.06.01",
                 sha256="abc123def456",
             )
-            meta_file = drive / ".visync" / "metadata" / "archlinux-2026.06.01-x86_64.iso.json"
+            meta_file = (
+                drive / ".visync" / "metadata" / "archlinux-2026.06.01-x86_64.iso.json"
+            )
             self.assertTrue(meta_file.exists())
             with open(meta_file) as f:
                 data = json.load(f)
@@ -94,7 +97,9 @@ class TestReadIsoMetadata(unittest.TestCase):
         _section("read_iso_metadata: Valid File")
         with tempfile.TemporaryDirectory() as tmpdir:
             drive = Path(tmpdir)
-            write_iso_metadata(drive, "fedora.iso", "fedora-kde-live", "44", "sha_fedora")
+            write_iso_metadata(
+                drive, "fedora.iso", "fedora-kde-live", "44", "sha_fedora"
+            )
             data = read_iso_metadata(drive, "fedora.iso")
             self.assertIsNotNone(data)
             self.assertEqual(data["variant_stem"], "fedora-kde-live")
@@ -233,11 +238,11 @@ class TestDirSize(unittest.TestCase):
         _section("_dir_size: Counts File Bytes")
         with tempfile.TemporaryDirectory() as tmpdir:
             p = Path(tmpdir)
-            (p / "a.txt").write_bytes(b"hello")     # 5 bytes
-            (p / "b.txt").write_bytes(b"world!")     # 6 bytes
+            (p / "a.txt").write_bytes(b"hello")  # 5 bytes
+            (p / "b.txt").write_bytes(b"world!")  # 6 bytes
             sub = p / "sub"
             sub.mkdir()
-            (sub / "c.txt").write_bytes(b"!")        # 1 byte
+            (sub / "c.txt").write_bytes(b"!")  # 1 byte
             self.assertEqual(_dir_size(p), 12)
             _ok("Total: 12 bytes across 3 files")
 
@@ -267,16 +272,29 @@ class TestVisyncWatchdog(unittest.TestCase):
             (drive / "real.iso").write_bytes(b"iso data")
             # Create metadata for real ISO and an orphan
             meta_dir = ensure_visync_dir(drive)
-            (meta_dir / "real.iso.json").write_text(json.dumps({
-                "variant_stem": "real", "version": "1.0",
-                "sha256": "abc", "sync_timestamp": "2026-01-01T00:00:00"
-            }))
-            (meta_dir / "deleted.iso.json").write_text(json.dumps({
-                "variant_stem": "deleted", "version": "1.0",
-                "sha256": "def", "sync_timestamp": "2026-01-01T00:00:00"
-            }))
+            (meta_dir / "real.iso.json").write_text(
+                json.dumps(
+                    {
+                        "variant_stem": "real",
+                        "version": "1.0",
+                        "sha256": "abc",
+                        "sync_timestamp": "2026-01-01T00:00:00",
+                    }
+                )
+            )
+            (meta_dir / "deleted.iso.json").write_text(
+                json.dumps(
+                    {
+                        "variant_stem": "deleted",
+                        "version": "1.0",
+                        "sha256": "def",
+                        "sync_timestamp": "2026-01-01T00:00:00",
+                    }
+                )
+            )
             # Mock _dir_size: over limit on first call, under after deep clean
             call_count = [0]
+
             def fake_size(p):
                 call_count[0] += 1
                 if call_count[0] == 1:
@@ -297,6 +315,7 @@ class TestVisyncWatchdog(unittest.TestCase):
             ensure_visync_dir(drive)
             # Fake .visync/ persists after deep clean
             call_count = [0]
+
             def fake_size(p):
                 call_count[0] += 1
                 # First call (check): over limit. Second call (after deep clean): still over.
@@ -345,8 +364,10 @@ class TestDeepCleanMetadata(unittest.TestCase):
             (meta_dir / "sneaky.iso").touch()
             (meta_dir / "gone.iso.json").write_text('{"v":2}')
             _deep_clean_metadata(drive)
-            self.assertTrue((meta_dir / "sneaky.iso").exists(),
-                            "non-json file must be left in place")
+            self.assertTrue(
+                (meta_dir / "sneaky.iso").exists(),
+                "non-json file must be left in place",
+            )
             self.assertFalse((meta_dir / "gone.iso.json").exists())
             _ok("Stray .iso skipped, orphan json still removed")
             # The .iso file must NOT have been deleted
@@ -514,6 +535,7 @@ class TestWatchdogGuardrails(unittest.TestCase):
             drive = Path(tmpdir)
             ensure_visync_dir(drive)
             call_count = [0]
+
             def fake_size(p):
                 call_count[0] += 1
                 return VISYNC_SIZE_LIMIT + 1 if call_count[0] <= 2 else 100
@@ -527,7 +549,7 @@ class TestWatchdogGuardrails(unittest.TestCase):
 if __name__ == "__main__":
     print()
     print(f"  {'#' * 62}")
-    print(f"  #   METADATA ENGINE — COMPREHENSIVE TESTS")
+    print("  #   METADATA ENGINE — COMPREHENSIVE TESTS")
     print(f"  {'#' * 62}")
     print()
     unittest.main(verbosity=2)
