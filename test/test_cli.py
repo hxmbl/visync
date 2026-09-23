@@ -86,6 +86,36 @@ class TestInstall(unittest.TestCase):
                 self.assertIn("Would download", result.stdout)
                 self.assertEqual(list(Path(tmpdir).glob("*.iso")), [])
 
+    @patch("src.main.find_installed_isos", side_effect=_mock_find_installed)
+    @patch("src.main.load_config")
+    def test_install_ambiguous_query_lists_candidates(
+        self, mock_cfg: MagicMock, _mock: MagicMock
+    ) -> None:
+        """Ambiguous install queries must list candidates, not just say unknown."""
+        mock_cfg.return_value = MOCK_CONFIG
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = runner.invoke(app, ["install", "u", "--drive", tmpdir])
+            self.assertNotEqual(result.exit_code, 0)
+            self.assertIn("Ambiguous distro", result.stdout)
+            self.assertIn("Arch Linux", result.stdout)
+            self.assertIn("Ubuntu Server", result.stdout)
+
+    @patch("src.main.find_installed_isos", side_effect=_mock_find_installed)
+    @patch("src.main.load_config")
+    def test_install_dry_run_creates_no_staging_dir(
+        self, mock_cfg: MagicMock, _mock: MagicMock
+    ) -> None:
+        """--dry-run must not create the staging cache directory."""
+        mock_cfg.return_value = MOCK_CONFIG
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("src.main.Path.home", return_value=Path(tmpdir)):
+                result = runner.invoke(
+                    app, ["install", "archlinux", "--drive", tmpdir, "--dry-run"]
+                )
+                self.assertEqual(result.exit_code, 0)
+                self.assertIn("Would download", result.stdout)
+            self.assertFalse((Path(tmpdir) / ".cache" / "visync" / "staging").exists())
+
     @patch("src.pm.mark_installed")
     @patch("src.main.identify_distro", side_effect=_mock_identify_distro)
     @patch("src.main.get_iso_volume_id", side_effect=_mock_get_vid)

@@ -112,7 +112,7 @@ def install(
     Use a distro name directly, or pass a file with one name per line.
     """
     from src.download import sync_all_configured_distros
-    from src.pm import mark_installed, resolve_distro
+    from src.pm import mark_installed, matching_distros, resolve_distro
 
     config_data = load_config(config)
     target_drives = _get_drives(_parse_drives(drive))
@@ -139,7 +139,15 @@ def install(
     for n in names:
         entry_id = resolve_distro(n, config_data)
         if not entry_id:
-            error(f"Unknown distro: '{n}'")
+            _, partials = matching_distros(n, config_data)
+            if partials:
+                candidate_names = ", ".join(sorted(
+                    config_data.get("distros", {}).get(p, {}).get("clean_name", p)
+                    for p in partials
+                ))
+                error(f"Ambiguous distro '{n}' — matches: {candidate_names}. Be specific.")
+            else:
+                error(f"Unknown distro: '{n}'")
             continue
         distro_config = config_data.get("distros", {}).get(entry_id, {})
         clean_name = distro_config.get("clean_name", entry_id)
@@ -152,12 +160,13 @@ def install(
     # Prefer the staging buffer whenever it is usable; per-download disk space
     # checks during the actual download remain the authoritative guard.
     staging_dir = Path.home() / ".cache" / "visync" / "staging"
-    try:
-        staging_dir.mkdir(parents=True, exist_ok=True)
-        use_buffer = True
-    except OSError as e:
-        warn(f"Staging buffer unavailable: {e} — downloading directly to drive")
-        use_buffer = False
+    use_buffer = True
+    if not dry_run:
+        try:
+            staging_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            warn(f"Staging buffer unavailable: {e} — downloading directly to drive")
+            use_buffer = False
 
     if no_staging:
         use_buffer = False

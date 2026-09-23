@@ -103,6 +103,27 @@ class TestDryRunGatesClean(unittest.TestCase):
             self.assertTrue(f43.exists(), "newer release must survive")
             self.assertFalse(f42.exists())
 
+    @patch("src.download.visync_watchdog")
+    @patch("src.download._check_distro")
+    def test_sync_dry_run_creates_no_staging_dir(self, mock_check, _wd):
+        """--dry-run must not create the staging cache directory."""
+        mock_check.return_value = ("ArchLinux", "Arch Linux",
+                                   "archlinux-2026.08.01-x86_64.iso", False, "https://m/x.iso")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            staging = Path(tmpdir) / "staging"
+            cfg = {
+                "iso": {},
+                "checksums": {"enabled": False},
+                "distros": {"ArchLinux": {"clean_name": "Arch Linux"}},
+            }
+            with patch("src.download.load_config", return_value=cfg), \
+                    patch.object(dl, "DEFAULT_STAGING_DIR", staging):
+                sync_all_configured_distros(
+                    dry_run=True, only=["ArchLinux"], drive_override=Path(tmpdir),
+                    use_buffer=True,
+                )
+            self.assertFalse(staging.exists(), "dry-run must not create the staging dir")
+
 
 # ── C2: chunked downloader rejects truncated / range-ignoring servers ────────
 
@@ -179,6 +200,138 @@ class TestChunkedIntegrity(unittest.TestCase):
             self.assertFalse(ok, "non-206 response must fail the download")
 
 
+class TestChunkedWindowsFallback(unittest.TestCase):
+    """Chunked downloader must work on Windows where os.pwrite does not exist."""
+
+    def _serve(self, handler_cls):
+        server = HTTPServer(("127.0.0.1", 0), handler_cls)
+        t = threading.Thread(target=server.serve_forever, daemon=True)
+
+        def _stop():
+            server.shutdown()
+            t.join()
+
+        self.addCleanup(_stop)
+        t.start()
+        return f"http://127.0.0.1:{server.server_address[1]}/x.iso"
+
+    def test_falls_back_to_lseek_write_when_pwrite_absent(self):
+        """Removing os.pwrite (Windows) must still download via per-thread writes."""
+        data = os.urandom(12 * 1024 * 1024)
+        handler = type("OkServer", (_RangeServer,), {"data": data})
+        url = self._serve(handler)
+        with tempfile.TemporaryDirectory() as tmpdir, \
+                patch.object(dl.os, "pwrite", None, create=True):
+            part = Path(tmpdir) / "x.iso.part"
+            ok = _download_chunked(url, part, len(data), 3, "x.iso")
+            self.assertTrue(ok, "download must succeed without os.pwrite")
+            self.assertEqual(part.read_bytes(), data, "bytes must match exactly")
+
+
+# ── Windows: missing gpg binary must surface as ChecksumUnavailable ──────────
+
+
+class TestMissingGpgBinary(unittest.TestCase):
+    """gpg is not installed by default on Windows. verify_iso must report the
+    checksum as UNAVAILABLE (keep the file) instead of crashing with an
+    unhandled FileNotFoundError from subprocess.run / subprocess.Popen."""
+
+    @patch("src.verify.shutil.which", return_value=None)
+    def test_import_key_then_verify_raises_checksum_unavailable(self, _mock_which):
+        from src.verify import ChecksumUnavailable, _import_key_then_verify
+        with self.assertRaises(ChecksumUnavailable):
+            _import_key_then_verify(
+                Path("/tmp/CHECKSUM"),
+                "https://fedoraproject.org/fedora.gpg",
+                "DEADBEEF00000000000000000000000000000000",
+            )
+
+    @patch("src.verify._fetch")
+    @patch("src.verify.shutil.which", return_value=None)
+    def test_verify_iso_keeps_file_when_gpg_missing(self, _mock_which, _mock_fetch):
+        """verify_iso must not raise FileNotFoundError when gpg is missing —
+        it should raise ChecksumUnavailable so callers keep the ISO."""
+        from src.verify import ChecksumUnavailable, verify_iso
+        _mock_fetch.return_value = "\n".join([
+            "-----BEGIN PGP SIGNED MESSAGE-----",
+            "Hash: SHA256",
+            "",
+            "SHA256 (Fedora.iso) = " + "0" * 64,
+            "-----BEGIN PGP SIGNATURE-----",
+            "sig",
+            "-----END PGP SIGNATURE-----",
+        ])
+        with self.assertRaises(ChecksumUnavailable):
+            verify_iso(
+                Path("/tmp/Fedora.iso"),
+                "https://mirror.example/CHECKSUM",
+                algo="sha256",
+                checksum_format="gpg_checksum",
+                signing_key_url="https://fedoraproject.org/fedora.gpg",
+            )
+
+
+# ── C2b: chunked writer must request binary mode on Windows ───────────────────
+
+
+class TestWindowsTextModeCorruption(unittest.TestCase):
+    """os.open() on Windows defaults to TEXT mode unless O_BINARY is passed.
+
+    Writing ISO bytes through a text-mode CRT fd translates every 0x0A into
+    0x0D 0x0A — silently corrupting every downloaded distro. The chunked
+    writer must OR in O_BINARY (a no-op constant on POSIX).
+    """
+
+    def _serve(self, handler_cls):
+        server = HTTPServer(("127.0.0.1", 0), handler_cls)
+        t = threading.Thread(target=server.serve_forever, daemon=True)
+
+        def _stop():
+            server.shutdown()
+            t.join()
+
+        self.addCleanup(_stop)
+        t.start()
+        return f"http://127.0.0.1:{server.server_address[1]}/x.iso"
+
+    def test_chunk_fds_are_binary_not_text(self):
+        """Per-thread write fds must be opened with O_BINARY (Windows)."""
+        payload = bytearray(os.urandom(12 * 1024 * 1024))
+        payload[::4096] = b"\n" * (len(payload) // 4096)  # force 0x0A bytes
+        payload = bytes(payload)
+        handler = type("OkServer", (_RangeServer,), {"data": payload})
+        url = self._serve(handler)
+
+        real_open = dl.os.open
+        real_write = dl.os.write
+        fake_binary = 0x8000  # Windows _O_BINARY
+        text_fds = set()
+
+        def win_open(path, flags, *a, **k):
+            fd = real_open(path, flags, *a, **k)
+            if not (flags & fake_binary):
+                text_fds.add(fd)  # CRT text-mode fd -> newline translation
+            return fd
+
+        def win_write(fd, b):
+            if fd in text_fds:
+                b = b.replace(b"\n", b"\r\n")  # text-mode write inflation
+            return real_write(fd, b)
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+                patch.object(dl.os, "O_BINARY", fake_binary, create=True), \
+                patch.object(dl.os, "pwrite", None, create=True), \
+                patch.object(dl.os, "open", win_open), \
+                patch.object(dl.os, "write", win_write):
+            part = Path(tmpdir) / "x.iso.part"
+            ok = _download_chunked(url, part, len(payload), 3, "x.iso")
+            self.assertTrue(ok, "download must succeed on Windows")
+            self.assertEqual(
+                part.read_bytes(), payload,
+                "ISO bytes must survive: text-mode fds would inflate 0x0A -> 0x0D 0x0A",
+            )
+
+
 # ── H1: verification unavailability must not delete downloads ────────────────
 
 
@@ -212,6 +365,46 @@ class TestDownloadKeepsFileWhenChecksumUnavailable(unittest.TestCase):
             )
             self.assertTrue(result, "download itself succeeded; unavailable ≠ mismatch")
             self.assertTrue(dest.exists(), "file must be kept when checksum unavailable")
+
+
+class TestDownloadOverwritesExistingDestination(unittest.TestCase):
+    """Re-download over an existing ISO must overwrite (Windows-safe atomic move)."""
+
+    @patch("src.download.urllib.request.urlopen")
+    def test_existing_destination_is_overwritten(self, mock_urlopen):
+        """PosixPath.rename raises FileExistsError on Windows; replace must be used."""
+        head = MagicMock()
+        head.headers = {"Content-Length": "500"}
+        head.__enter__ = lambda s: s
+        head.__exit__ = MagicMock(return_value=False)
+        body = MagicMock()
+        body.headers = {"Content-Length": "500"}
+        body.read.side_effect = [b"x" * 500, b""]
+        body.__enter__ = lambda s: s
+        body.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.side_effect = [head, body]
+
+        from src.download import download_iso
+
+        real_rename = dl.Path.rename
+
+        def windows_rename(self, target):
+            if Path(target).exists():
+                raise FileExistsError(17, "File exists", str(target))
+            return real_rename(self, target)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dest = Path(tmpdir) / "test.iso"
+            dest.write_bytes(b"stale previous download")
+            with patch.object(dl.Path, "rename", windows_rename):
+                result = download_iso(
+                    "https://example.com/test.iso", dest,
+                    distro_config=None,
+                    checksums_config=None,
+                )
+            self.assertTrue(result)
+            self.assertEqual(dest.read_bytes(), b"x" * 500,
+                             "destination must be replaced, not left stale")
 
 
 # ── H2: API strategies stash resolved checksums ──────────────────────────────
@@ -401,7 +594,8 @@ class TestGpgFingerprintPinning(unittest.TestCase):
             return r
 
         with patch("src.verify.subprocess.run", side_effect=fake_run), \
-             patch("src.verify.urlopen") as mu:
+             patch("src.verify.urlopen") as mu, \
+             patch("src.verify.shutil.which", return_value="/usr/bin/gpg"):
             resp = MagicMock()
             resp.read.return_value = b"-----BEGIN PGP PUBLIC KEY BLOCK-----"
             resp.__enter__ = lambda s: s
@@ -541,7 +735,8 @@ class TestValidSigPrimaryField(unittest.TestCase):
             return r
 
         with patch("src.verify.subprocess.run", side_effect=fake_run), \
-             patch("src.verify.urlopen") as mu:
+             patch("src.verify.urlopen") as mu, \
+             patch("src.verify.shutil.which", return_value="/usr/bin/gpg"):
             resp = MagicMock()
             resp.read.return_value = b"key"
             resp.__enter__ = lambda s: s

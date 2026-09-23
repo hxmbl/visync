@@ -327,12 +327,15 @@ def _download_chunked(
 ) -> bool:
     """Download a file using HTTP Range requests in parallel threads.
 
-    Writes directly to part_path at the correct offsets using os.pwrite.
+    Writes directly to part_path at the correct offsets, using os.pwrite where
+    available and per-thread lseek/write on platforms that lack it (Windows).
     Returns True on success, False on failure.
     """
     import threading
 
     require_https(url, "ISO download")
+
+    pwrite_available = callable(getattr(os, "pwrite", None))
 
     chunk_size = max(MIN_CHUNK_SIZE, total // num_threads)
     # Build (start, end) ranges
@@ -346,8 +349,11 @@ def _download_chunked(
     actual_threads = len(ranges)
     _debug(f"Chunked download: {total} bytes in {actual_threads} chunks of ~{chunk_size} bytes")
 
-    # Pre-allocate the file
-    fd = os.open(str(part_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
+    # Pre-allocate the file. O_BINARY is required on Windows — without it the
+    # CRT opens in text mode and os.write() inflates every 0x0A into 0x0D 0x0A,
+    # silently corrupting ISO bytes. It is a no-op constant on POSIX.
+    _BINARY = getattr(os, "O_BINARY", 0)
+    fd = os.open(str(part_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | _BINARY)
     try:
         os.ftruncate(fd, total)
     except OSError:
@@ -361,6 +367,9 @@ def _download_chunked(
     def _download_chunk(idx: int, chunk_start: int, chunk_end: int) -> None:
         nonlocal downloaded
         range_header = f"bytes={chunk_start}-{chunk_end}"
+        thread_fd = None
+        if not pwrite_available:
+            thread_fd = os.open(str(part_path), os.O_WRONLY | _BINARY)
         try:
             req = urllib.request.Request(
                 url,
@@ -393,17 +402,24 @@ def _download_chunked(
                                 f"by {len(data) - room} bytes"
                             )
                         return
-                    written = os.pwrite(fd, data, offset)
+                    if pwrite_available:
+                        written = os.pwrite(fd, data, offset)
+                    else:
+                        os.lseek(thread_fd, offset, os.SEEK_SET)
+                        written = os.write(thread_fd, data)
                     offset += written
                     with lock:
                         downloaded[idx] = offset - chunk_start
                     if written < len(data):
                         with lock:
-                            errors.append(f"Chunk {idx}: short pwrite ({written} of {len(data)})")
+                            errors.append(f"Chunk {idx}: short write ({written} of {len(data)})")
                         return
         except Exception as e:
             with lock:
                 errors.append(f"Chunk {idx}: {e}")
+        finally:
+            if thread_fd is not None:
+                os.close(thread_fd)
 
     try:
         with make_download_progress() as progress:
@@ -569,7 +585,7 @@ def download_iso(
         part_path.unlink(missing_ok=True)
         return False
 
-    part_path.rename(dest_path)
+    part_path.replace(dest_path)
     if drive_root and dest_path.parent != drive_root:
         success(f"Downloaded to staging: {dest_path.name}")
     else:
@@ -908,7 +924,7 @@ def sync_all_configured_distros(
 
     if not distro_scrapers:
         error("No distribution definitions configured inside [distros] block.")
-        return
+        return None, []
 
     if drive_override:
         ventoy_root = drive_override
@@ -916,7 +932,7 @@ def sync_all_configured_distros(
         drives = find_ventoy_drives()
         if not drives:
             error("No Ventoy drives found.")
-            return
+            return None, []
         ventoy_root = drives[0]
 
     visync_watchdog(ventoy_root)
@@ -925,7 +941,8 @@ def sync_all_configured_distros(
     config_download_dir = iso_settings.get("download_dir", "").strip()
     if use_buffer:
         download_target_dir = Path(config_download_dir) if config_download_dir else DEFAULT_STAGING_DIR
-        download_target_dir.mkdir(parents=True, exist_ok=True)
+        if not dry_run:
+            download_target_dir.mkdir(parents=True, exist_ok=True)
         info(f"Buffer staging → {download_target_dir}")
     else:
         download_target_dir = ventoy_root
@@ -937,7 +954,7 @@ def sync_all_configured_distros(
         distro_scrapers = {k: v for k, v in distro_scrapers.items() if k in only}
         if not distro_scrapers:
             warn("None of the specified distros are configured.")
-            return
+            return None, []
 
     spin_start("Syncing ISOs...")
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=len(distro_scrapers))

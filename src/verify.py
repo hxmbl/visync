@@ -10,6 +10,7 @@ Supports multiple checksum formats:
 import hashlib
 import json
 import re
+import shutil
 import subprocess
 import tempfile
 import urllib.request
@@ -152,6 +153,11 @@ def _fetch(url: str) -> str:
 
 
 def _import_key_then_verify(signed_path: Path, key_url: str, key_fingerprint: str | list[str] = "") -> bool:
+    if shutil.which("gpg") is None:
+        raise ChecksumUnavailable(
+            "gpg binary not found — cannot verify the GPG signature "
+            "(install GnuPG, or it is not on PATH)"
+        )
     wanted = _normalize_fingerprints(key_fingerprint)
     key_file = Path(tempfile.mkdtemp(prefix="visync-gpg")) / "signing.key"
     try:
@@ -198,7 +204,6 @@ def _import_key_then_verify(signed_path: Path, key_url: str, key_fingerprint: st
                  "(set signing_key_fingerprint in config)")
         return True
     finally:
-        import shutil
         shutil.rmtree(key_file.parent, ignore_errors=True)
 
 
