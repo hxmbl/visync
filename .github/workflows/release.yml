@@ -28,6 +28,8 @@ jobs:
         run: pyright --pythonpath "$(python -c 'import sys; print(sys.executable)')"
       - name: Run tests with coverage
         run: pytest
+        env:
+          _TYPER_FORCE_DISABLE_TERMINAL: "1"
       - name: Build wheel and sdist
         run: python -m build
       - name: Install wheel in clean venv and smoke test
