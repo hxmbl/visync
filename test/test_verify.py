@@ -109,6 +109,27 @@ SHA256 (Fedora-Workstation-Live-x86_64-41-1.4.iso?key=val) = deadbeef
         self.assertEqual(result, "aa" * 32)
         _ok("Only SHA256/SHA512 lines are matched")
 
+    def test_selects_requested_algo_when_both_present(self) -> None:
+        """A file listing SHA256 and SHA512 for one ISO must honour *algo*."""
+        content = (
+            "SHA256 (file.iso) = " + "aa" * 32 + "\n"
+            "SHA512 (file.iso) = " + "bb" * 64 + "\n"
+        )
+        self.assertEqual(parse_gpg_checksum(content, "file.iso", "sha512"), "bb" * 64)
+        self.assertEqual(parse_gpg_checksum(content, "file.iso", "sha256"), "aa" * 32)
+        _ok("Algorithm label selects the right digest")
+
+    def test_rejects_digest_of_wrong_length(self) -> None:
+        """A mislabelled line (SHA256 label, 128-hex body) is not accepted."""
+        content = "SHA256 (file.iso) = " + "cc" * 64
+        self.assertIsNone(parse_gpg_checksum(content, "file.iso", "sha256"))
+        _ok("Length mismatch rejected rather than compared")
+
+    def test_unknown_algo_returns_none(self) -> None:
+        self.assertIsNone(
+            parse_gpg_checksum("SHA256 (f.iso) = " + "aa" * 32, "f.iso", "crc32")
+        )
+
 
 class TestParseHashsums(unittest.TestCase):
     def test_parses_ubuntu_style(self) -> None:
@@ -158,6 +179,96 @@ class TestParseHashsums(unittest.TestCase):
         )
         _ok("Exact filename match avoids substring false positives")
 
+    def test_multi_algorithm_sections_pick_requested_algo(self) -> None:
+        """Parrot-shaped signed-hashes.txt: md5/sha256/sha512 sections.
+
+        This is the regression for the data-loss bug: the md5 line comes first,
+        so a first-match parser returned a 32-hex digest that could never match
+        a sha256 comparison, and download_iso deleted the finished download.
+        """
+        content = (
+            "md5\n"
+            "a3ddddeb89af1768ff28d45dce5c6285  Parrot-security-7.4_amd64.iso\n"
+            "sha256\n"
+            "ca241282068701f481d96487dcd1af788bd897cd586ceb38ee16f61e387aa291"
+            "  Parrot-security-7.4_amd64.iso\n"
+            "sha512\n"
+            "cc85c85061aa5539afc865895c9a2354a709ca53e246264a71dc93eeb2eedaac1"
+            "7b9d548f25235655fefbc7c7e080398af061c041f8ba91d4ae43ddd163e931b"
+            "  Parrot-security-7.4_amd64.iso\n"
+        )
+        iso = "Parrot-security-7.4_amd64.iso"
+        self.assertEqual(
+            parse_hashsums(content, iso, "sha256"),
+            "ca241282068701f481d96487dcd1af788bd897cd586ceb38ee16f61e387aa291",
+        )
+        self.assertEqual(
+            parse_hashsums(content, iso, "sha512"),
+            "cc85c85061aa5539afc865895c9a2354a709ca53e246264a71dc93eeb2eedaac1"
+            "7b9d548f25235655fefbc7c7e080398af061c041f8ba91d4ae43ddd163e931b",
+        )
+        self.assertEqual(
+            parse_hashsums(content, iso, "md5"),
+            "a3ddddeb89af1768ff28d45dce5c6285",
+        )
+        _ok("Section headers select the requested algorithm, not the first line")
+
+    def test_multi_algorithm_default_algo_is_sha256(self) -> None:
+        """Defaulting to sha256 must not regress to 'first match' behaviour."""
+        content = (
+            "md5\n"
+            "a3ddddeb89af1768ff28d45dce5c6285  Parrot-security-7.4_amd64.iso\n"
+            "sha256\n"
+            "ca241282068701f481d96487dcd1af788bd897cd586ceb38ee16f61e387aa291"
+            "  Parrot-security-7.4_amd64.iso\n"
+        )
+        self.assertEqual(
+            parse_hashsums(content, "Parrot-security-7.4_amd64.iso"),
+            "ca241282068701f481d96487dcd1af788bd897cd586ceb38ee16f61e387aa291",
+        )
+
+    def test_absent_algo_section_returns_none(self) -> None:
+        """No sha512 section means unavailable, not a wrong-length digest."""
+        content = (
+            "md5\n"
+            "a3ddddeb89af1768ff28d45dce5c6285  Parrot-security-7.4_amd64.iso\n"
+            "sha256\n"
+            "ca241282068701f481d96487dcd1af788bd897cd586ceb38ee16f61e387aa291"
+            "  Parrot-security-7.4_amd64.iso\n"
+        )
+        self.assertIsNone(
+            parse_hashsums(content, "Parrot-security-7.4_amd64.iso", "sha512")
+        )
+        _ok("Missing algorithm yields None so the caller keeps the file")
+
+    def test_section_headers_absent_length_is_backstop(self) -> None:
+        """With no headers, digest length alone must disambiguate."""
+        content = (
+            "a3ddddeb89af1768ff28d45dce5c6285  Parrot-security-7.4_amd64.iso\n"
+            "ca241282068701f481d96487dcd1af788bd897cd586ceb38ee16f61e387aa291"
+            "  Parrot-security-7.4_amd64.iso\n"
+        )
+        self.assertEqual(
+            parse_hashsums(content, "Parrot-security-7.4_amd64.iso", "sha256"),
+            "ca241282068701f481d96487dcd1af788bd897cd586ceb38ee16f61e387aa291",
+        )
+        _ok("Length check still protects header-less files")
+
+    def test_sha1sums_selects_sha1(self) -> None:
+        sha1 = "da39a3ee5e6b4b0d3255bfef95601890afd80709"  # 40 hex
+        sha256 = "ca241282068701f481d96487dcd1af788bd897cd586ceb38ee16f61e387aa291"
+        content = (
+            f"{sha1}  Parrot-security-7.4_amd64.iso\n"
+            f"{sha256}  Parrot-security-7.4_amd64.iso\n"
+        )
+        self.assertEqual(
+            parse_hashsums(content, "Parrot-security-7.4_amd64.iso", "sha1"), sha1
+        )
+        self.assertEqual(
+            parse_hashsums(content, "Parrot-security-7.4_amd64.iso", "sha256"), sha256
+        )
+        _ok("40-hex and 64-hex digests disambiguate by length")
+
 
 class TestParseTailsJson(unittest.TestCase):
     def test_parses_valid_json(self) -> None:
@@ -180,6 +291,11 @@ class TestParseTailsJson(unittest.TestCase):
     def test_invalid_json_returns_none(self) -> None:
         result = parse_tails_json("not json")
         self.assertIsNone(result)
+
+    def test_rejects_digest_of_wrong_length(self) -> None:
+        """A short digest must not be compared against a sha256 local hash."""
+        data = {"sha256": "abcd1234"}
+        self.assertIsNone(parse_tails_json(json.dumps(data)))
 
 
 class TestExpandUrl(unittest.TestCase):

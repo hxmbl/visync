@@ -104,7 +104,9 @@ Config resolution order: explicit `--config` path, then `$VISYNC_CONFIG`, then `
 | `popos_api` | JSON API | Pop!_OS |
 | `tails_api` | JSON API | Tails |
 
-**Checksum formats:** `gpg_checksum` (Fedora), `sha256sums` (Ubuntu, Arch, NixOS, Tails), `json` (Tails)
+**Checksum formats:** `gpg_checksum` (Fedora — inline `SHA256 (file) = hash`), `sha256sums` (Ubuntu, Arch, Parrot, NixOS, Tails), `json` (Tails)
+
+Signature checking is configured separately via `signing_key_url` + `signing_key_fingerprint` and works with any signed layout, so Parrot's sectioned hash list gets both a signature check and a digest check.
 
 ## How it works
 
@@ -128,7 +130,8 @@ Config resolution order: explicit `--config` path, then `$VISYNC_CONFIG`, then `
 - Downloads use parallel range requests with per-chunk HTTP 206 and byte-count validation; truncated or range-ignoring servers fail loudly instead of producing silent corruption
 - Checksum mismatch deletes the download; an *unreachable* checksum source keeps the file and warns (`UNVERIFIED`)
 - HTTPS is enforced for all mirrors and checksum sources (loopback exempt); https→http redirects are blocked
-- Fedora GPG verification supports fingerprint pinning via `signing_key_fingerprint`
+- GPG signature verification supports fingerprint pinning via `signing_key_fingerprint`, and applies to any signed checksum file regardless of its digest layout (Fedora's inline `SHA256 (file) = hash`, Parrot's sectioned md5/sha256/sha512 list)
+- When multiple digests for the same file appear in one signed list, the configured `checksum_algo` selects the section — a first-match parser would compare an MD5 against a SHA-256 and delete a good download as corrupt
 - Failed downloads clean up `.part` files automatically
 - Install verifies file exists on drive before marking as installed
 - State and metadata writes are atomic (tmp file + rename)

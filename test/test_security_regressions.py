@@ -306,6 +306,81 @@ class TestMissingGpgBinary(unittest.TestCase):
             )
 
 
+# ── C2: signature authenticity must not depend on the digest layout ───────────
+
+
+class TestSignatureCheckedForPlainSumsFormat(unittest.TestCase):
+    """Parrot's signed-hashes.txt is clearsigned but parsed as plain
+    `hash  filename`. verify_iso used to run the GPG check only when
+    checksum_format == "gpg_checksum", so Parrot's digests were never
+    authenticated at all."""
+
+    @patch("src.verify._import_key_then_verify")
+    @patch("src.verify._fetch")
+    def test_valid_signature_verifies_plain_sums_format(self, mock_fetch, mock_import):
+        from src.verify import verify_iso
+
+        mock_fetch.return_value = "0" * 64 + "  Parrot-security-7.4_amd64.iso\n"
+        mock_import.return_value = True
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            iso = Path(tmpdir) / "Parrot-security-7.4_amd64.iso"
+            iso.write_bytes(b"x" * 64)
+            with patch("src.verify.compute_iso_hash", return_value="0" * 64):
+                result = verify_iso(
+                    iso,
+                    "https://deb.parrotsec.org/parrot/iso/7.4/signed-hashes.txt",
+                    algo="sha256",
+                    checksum_format="sha256sums",
+                    signing_key_url="https://deb.parrot.sh/parrot/misc/archive.gpg",
+                    signing_key_fingerprint="B711822346552E4D92DA02DF7A8286AF0E81EE4A",
+                )
+
+        mock_import.assert_called_once()
+        self.assertTrue(result, "valid signature + matching digest must verify")
+
+    @patch("src.verify._import_key_then_verify")
+    @patch("src.verify._fetch")
+    def test_bad_signature_fails_plain_sums_format(self, mock_fetch, mock_import):
+        from src.verify import verify_iso
+
+        mock_fetch.return_value = "0" * 64 + "  Parrot-security-7.4_amd64.iso\n"
+        mock_import.return_value = False
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            iso = Path(tmpdir) / "Parrot-security-7.4_amd64.iso"
+            iso.write_bytes(b"x" * 64)
+            result = verify_iso(
+                iso,
+                "https://deb.parrotsec.org/parrot/iso/7.4/signed-hashes.txt",
+                checksum_format="sha256sums",
+                signing_key_url="https://deb.parrot.sh/parrot/misc/archive.gpg",
+            )
+
+        self.assertFalse(result, "a rejected signature must not verify")
+
+    @patch("src.verify._fetch")
+    def test_no_signing_key_skips_gpg_entirely(self, mock_fetch):
+        """Distros without a signing_key_url must not require gpg at all."""
+        from src.verify import verify_iso
+
+        mock_fetch.return_value = "0" * 64 + "  arch.iso\n"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            iso = Path(tmpdir) / "arch.iso"
+            iso.write_bytes(b"x" * 64)
+            with (
+                patch("src.verify.shutil.which", return_value=None),
+                patch("src.verify.compute_iso_hash", return_value="0" * 64),
+            ):
+                result = verify_iso(
+                    iso,
+                    "https://mirror.example/SHA256SUMS",
+                    checksum_format="sha256sums",
+                    signing_key_url=None,
+                )
+        self.assertTrue(result, "unsigned sums files still verify without gpg")
+
+
 # ── C2b: chunked writer must request binary mode on Windows ───────────────────
 
 

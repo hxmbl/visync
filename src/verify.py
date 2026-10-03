@@ -229,21 +229,53 @@ def _normalize_fingerprints(value: str | list[str]) -> list[str]:
 
 # ── Checksum-file parsers ─────────────────────────────────────────
 
+# Digest length in hex characters. A SUMS file may legitimately list the same
+# file under several algorithms (Parrot's signed-hashes.txt has md5, sha256 and
+# sha512 sections), so a parser must select by expected length, not by whichever
+# line appears first. Without this, Parrot's md5 line was compared against a
+# sha256 digest, the comparison always failed, and download_iso deleted a
+# perfectly good 2 GiB download as "corrupt".
+_ALGO_HEX_LEN = {"md5": 32, "sha1": 40, "sha256": 64, "sha512": 128}
 
-def parse_gpg_checksum(content: str, iso_name: str) -> str | None:
+# Case-insensitive algorithm names as they appear in signed content.
+_ALGO_LABEL_RE = {
+    "md5": "MD5",
+    "sha1": "SHA1",
+    "sha256": "SHA256",
+    "sha512": "SHA512",
+}
+
+
+def _hex_len_for(algo: str) -> int | None:
+    """Expected hex digest length for *algo*, or None if unrecognised."""
+    return _ALGO_HEX_LEN.get(algo.strip().lower().replace("-", ""))
+
+
+def parse_gpg_checksum(content: str, iso_name: str, algo: str = "sha256") -> str | None:
     """Parse a GPG-inline-signed CHECKSUM file (e.g. Fedora).
 
     Lines look like:  SHA256 (Fedora-Workstation-...iso) = <hex>
+    A Fedora CHECKSUM file can carry both SHA256 and SHA512 lines for the same
+    ISO, so the labelled algorithm must match *algo* rather than being
+    pattern-matched loosely.
     """
+    want = _hex_len_for(algo)
+    if want is None:
+        return None
+    label = _ALGO_LABEL_RE.get(algo.strip().lower().replace("-", ""))
+    if label is None:
+        return None
+    pattern = re.compile(
+        r"\b"
+        + label
+        + r"\s*\(([^)]*"
+        + re.escape(iso_name)
+        + r"[^)]*)\)\s*=\s*([a-fA-F0-9]+)",
+        re.IGNORECASE,
+    )
     for line in content.splitlines():
-        line = line.strip()
-        m = re.search(
-            r"SHA(?:256|512)\s*\(([^)]*"
-            + re.escape(iso_name)
-            + r"[^)]*)\)\s*=\s*([a-fA-F0-9]{64,128})",
-            line,
-        )
-        if m:
+        m = pattern.search(line.strip())
+        if m and len(m.group(2)) == want:
             return m.group(2).lower()
     return None
 
@@ -255,23 +287,65 @@ def _sums_filename(field: str) -> str:
     return name
 
 
-def parse_hashsums(content: str, iso_name: str) -> str | None:
-    """Parse a standard *SUMS file (hash  filename)."""
-    for line in content.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
+def parse_hashsums(content: str, iso_name: str, algo: str = "sha256") -> str | None:
+    """Parse a standard *SUMS file (hash  filename), selecting the *algo* digest.
+
+    Multi-algorithm files (Parrot) put bare section headers such as ``md5`` and
+    ``sha256`` above each block, so a matching line is additionally required to
+    fall inside the requested algorithm's section when such headers are present.
+    Digest length is the final backstop.
+    """
+    want = _hex_len_for(algo)
+    if want is None:
+        return None
+
+    section: str | None = None
+    sections_present = False
+    fallback: str | None = None
+
+    for raw in content.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        bare = line.strip("*").lower()
+        if bare in _ALGO_HEX_LEN:
+            section = bare
+            sections_present = True
+            continue
+        if line.startswith("#"):
             continue
         parts = line.split(None, 1)
-        if len(parts) == 2 and _sums_filename(parts[1]) == iso_name:
-            return parts[0].lower()
-    return None
+        if len(parts) != 2 or _sums_filename(parts[1]) != iso_name:
+            continue
+        digest = parts[0].strip().lower()
+        if len(digest) != want or not re.fullmatch(r"[a-f0-9]+", digest):
+            continue
+        if sections_present:
+            # Headers delimit real sections; only trust a digest in the
+            # requested one.
+            if section == algo.strip().lower().replace("-", ""):
+                return digest
+            continue
+        # No section headers: a length match is unambiguous.
+        return digest
+
+    return fallback
 
 
-def parse_tails_json(content: str, iso_name: str = "") -> str | None:
+def parse_tails_json(
+    content: str, iso_name: str = "", algo: str = "sha256"
+) -> str | None:
     """Parse Tails latest.json containing a sha256 field."""
     try:
         data = json.loads(content)
-        return data.get("sha256", "").lower() or None
+        digest = data.get("sha256", "")
+        if not isinstance(digest, str):
+            return None
+        digest = digest.lower()
+        want = _hex_len_for(algo)
+        if want is not None and len(digest) != want:
+            return None
+        return digest or None
     except (json.JSONDecodeError, AttributeError):
         return None
 
@@ -314,8 +388,12 @@ def verify_iso(
     except Exception as e:
         raise ChecksumUnavailable(f"{checksum_url}: {e}") from e
 
-    # GPG verification (inline-signed content)
-    if signing_key_url and checksum_format == "gpg_checksum":
+    # GPG verification of the fetched content. This is deliberately independent
+    # of checksum_format: signature authenticity and digest *parsing* are
+    # separate concerns. Parrot's signed-hashes.txt is clearsigned but uses a
+    # plain `hash  filename` layout with md5/sha256/sha512 sections, so gating
+    # the signature check on "gpg_checksum" left it entirely unauthenticated.
+    if signing_key_url:
         with tempfile.TemporaryDirectory() as tmpdir:
             signed = Path(tmpdir) / "CHECKSUM.asc"
             signed.write_text(content)
@@ -330,10 +408,11 @@ def verify_iso(
             f"unknown checksum_format '{checksum_format}' for {iso_name}"
         )
 
-    expected = parser(content, iso_name)
+    expected = parser(content, iso_name, algo)
     if not expected:
         raise ChecksumUnavailable(
-            f"{iso_name} not listed in {checksum_url} — cannot determine expected hash"
+            f"no {algo} digest for {iso_name} in {checksum_url} — "
+            f"cannot determine expected hash"
         )
 
     if precomputed_hash and algo == "sha256":

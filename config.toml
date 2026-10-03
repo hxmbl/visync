@@ -168,9 +168,21 @@ strategy = "ubuntu_nested"
 base_url = "https://deb.parrotsec.org/parrot/iso/"
 version_regex = 'href="([0-9\.]+(?:-[0-9]+)?)/"'
 iso_regex = 'href="(Parrot-security-[0-9\.]+_amd64\.iso)"'
+# signed-hashes.txt is one clearsigned file listing md5, sha256 and sha512
+# sections for every image. The parser selects the sha256 section by header
+# and digest length — taking the first match would compare an md5 against a
+# sha256 and delete a good download as "corrupt".
 checksum_url = "{base_url}{version}/signed-hashes.txt"
 checksum_format = "sha256sums"
 checksum_algo = "sha256"
+# Signing key published by Parrot and referenced from inside the signed
+# content itself. Fingerprint confirmed via gpg --verify (VALIDSIG) against
+# the untouched file, and matches the fingerprint in Parrot's own
+# hash-and-key-verification documentation.
+signing_key_url = "https://deb.parrot.sh/parrot/misc/archive.gpg"
+signing_key_fingerprint = [
+    "B711822346552E4D92DA02DF7A8286AF0E81EE4A",
+]
 
 [distros.NixOS]
 clean_name = "NixOS Minimal"
