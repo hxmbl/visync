@@ -183,6 +183,9 @@ pythonVersion = "3.11"
 
 [tool.pytest.ini_options]
 testpaths = ["test"]
+# So CI can load the drive-detection stub by name: `pytest -p ci_no_ventoy_drive`.
+# It is a plugin rather than a test file, so `test_*.py` collection ignores it.
+pythonpath = ["test"]
 # --cov=src was left behind by the src/ -> visync/ rename. It matched no
 # module, so coverage measured 0% while every test passed and CI failed
 # on a green run.

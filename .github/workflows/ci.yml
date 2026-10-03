@@ -65,7 +65,13 @@ jobs:
       - name: Install project and dev tools
         run: uv sync --locked --python ${{ matrix.python-version }} --extra dev
       - name: Run tests with coverage
-        run: uv run pytest
+        # -p ci_no_ventoy_drive stubs drive detection to [] so the suite runs
+        # against the machine CI actually has: no Ventoy stick plugged in. It
+        # catches tests that pass only because the maintainer's hardware happens
+        # to be attached, which is otherwise invisible until someone else's CI
+        # goes red. Not enabled for local runs, where the hardware tests still
+        # have something to talk to.
+        run: uv run pytest -p ci_no_ventoy_drive
         env:
           _TYPER_FORCE_DISABLE_TERMINAL: "1"
       - name: Upload coverage report

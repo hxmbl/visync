@@ -2314,19 +2314,32 @@ class TestInterruptDiscardsPartial(unittest.TestCase):
             self._run(fake_download)
 
     def test_cli_exits_130_on_interrupt(self):
-        """The CLI turns Ctrl-C into a clean exit(130), not a traceback."""
+        """The CLI turns Ctrl-C into a clean exit(130), not a traceback.
+
+        The drive is supplied explicitly rather than left to detection: with no
+        Ventoy drive attached the command exits 1 at the "no drives detected"
+        check and never reaches the download, which is what CI reported. That
+        made this test pass only when the developer's stick happened to be
+        plugged in — the worst kind of green.
+        """
         from typer.testing import CliRunner
 
         from visync.main import app
 
-        with (
-            patch("visync.download.download_iso", side_effect=KeyboardInterrupt),
-            patch("visync.download.DEFAULT_STAGING_DIR", Path(tempfile.gettempdir())),
-        ):
-            result = CliRunner().invoke(
-                app,
-                ["--yes", "sync", "--all", "--no-verify", "--no-staging"],
-            )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            drive = Path(tmpdir)
+            (drive / "ventoy").mkdir()
+            with (
+                patch("visync.main.find_ventoy_drives", return_value=[drive]),
+                patch("visync.download.download_iso", side_effect=KeyboardInterrupt),
+                patch(
+                    "visync.download.DEFAULT_STAGING_DIR", Path(tempfile.gettempdir())
+                ),
+            ):
+                result = CliRunner().invoke(
+                    app,
+                    ["--yes", "sync", "--all", "--no-verify", "--no-staging"],
+                )
         self.assertEqual(result.exit_code, 130, result.output)
         self.assertNotIn("Traceback", result.output)
 
