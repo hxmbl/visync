@@ -15,6 +15,7 @@ from src.download import (
     SyncStatus,
     _check_distro,
     _cleanup_old_versions,
+    _filename_variant_key,
     _variant_stem,
     download_iso,
     fetch_html,
@@ -22,6 +23,7 @@ from src.download import (
     load_config,
     ping_mirror,
     process_scraping_strategy,
+    same_variant_prefix,
 )
 
 
@@ -115,35 +117,74 @@ class TestPingMirror(unittest.TestCase):
 
 
 class TestVariantStem(unittest.TestCase):
+    """variant_key strips architecture tokens so a volume-ID key matches the
+    filename key of the same distro. The previous volume-ID path kept 'amd64'
+    and 'x86_64' (its underscore-protection step is a no-op for every arch
+    except x86_64), so the two key schemes disagreed."""
+
     def test_fedora_everything(self):
-        _section("_variant_stem: Fedora Everything")
+        _section("variant_key: Fedora Everything")
         result = _variant_stem("Fedora-E-dvd-x86_64-44")
-        self.assertEqual(result, "fedora-e-dvd-x86_64")
+        self.assertEqual(result, "fedora-e-dvd")
         _ok(f"Result: {result}")
 
     def test_fedora_kde(self):
-        _section("_variant_stem: Fedora KDE")
+        _section("variant_key: Fedora KDE")
         result = _variant_stem("Fedora-KDE-Live-44")
         self.assertEqual(result, "fedora-kde-live")
         _ok(f"Result: {result}")
 
     def test_fedora_sway(self):
-        _section("_variant_stem: Fedora Sway")
+        _section("variant_key: Fedora Sway")
         result = _variant_stem("Fedora-Sway-Live-44")
         self.assertEqual(result, "fedora-sway-live")
         _ok(f"Result: {result}")
 
     def test_ubuntu_server_with_lts(self):
-        _section("_variant_stem: Ubuntu Server LTS")
+        _section("variant_key: Ubuntu Server LTS")
         result = _variant_stem("Ubuntu-Server 24.04.4 LTS amd64")
-        self.assertEqual(result, "ubuntu-server-amd64")
+        self.assertEqual(result, "ubuntu-server")
         _ok(f"Result: {result}")
 
     def test_ubuntu_server_without_lts(self):
-        _section("_variant_stem: Ubuntu Server (no LTS)")
+        _section("variant_key: Ubuntu Server (no LTS)")
         result = _variant_stem("Ubuntu-Server 26.04 amd64")
-        self.assertEqual(result, "ubuntu-server-amd64")
+        self.assertEqual(result, "ubuntu-server")
         _ok(f"Result: {result}")
+
+    def test_arch_linux(self):
+        _section("variant_key: Arch Linux")
+        result = _variant_stem("ARCH_202610")
+        self.assertEqual(result, "arch")
+        _ok(f"Result: {result}")
+
+    def test_volume_id_and_filename_share_a_variant_prefix(self):
+        """The invariant that was violated.
+
+        Full equality is the wrong assertion: a volume ID is terser than a
+        filename ("Fedora-KDE-Live-44" vs "...-Desktop-Live-44-1.7...iso"), so
+        the keys differ in detail by design. What cleanup actually needs is that
+        neither side rules the other out — which is what the old
+        ``startswith`` comparison failed to guarantee, because 'pop_os' (volume
+        ID) could never match 'pop-os' (filename).
+        """
+        _section("variant_key: volume ID and filename are compatible")
+        pairs = [
+            ("Fedora-KDE-Live-44", "Fedora-KDE-Desktop-Live-44-1.7.x86_64.iso"),
+            ("Pop_OS 24.04 amd64", "pop-os_24.04_amd64_generic_24.iso"),
+            ("ARCH_202610", "archlinux-2026.10.01-x86_64.iso"),
+            ("Ubuntu-Server 26.04.1 LTS amd64", "ubuntu-26.04.1-live-server-amd64.iso"),
+        ]
+        for vid, filename in pairs:
+            with self.subTest(pair=(vid, filename)):
+                self.assertTrue(
+                    same_variant_prefix(
+                        _variant_stem(vid), _filename_variant_key(filename)
+                    ),
+                    f"{_variant_stem(vid)!r} must not rule out "
+                    f"{_filename_variant_key(filename)!r}",
+                )
+        _ok("every real volume ID/filename pair survives the pre-filter")
 
     def test_ubuntu_versions_match(self):
         _section("_variant_stem: Ubuntu Cross-Version Match")
@@ -162,10 +203,10 @@ class TestVariantStem(unittest.TestCase):
         self.assertNotEqual(s1, s3)
         _ok("All three Fedora variants produce unique stems")
 
-    def test_arch_linux(self):
-        _section("_variant_stem: Arch Linux")
+    def test_arch_linux_filename(self):
+        _section("variant_key: Arch Linux (filename)")
         result = _variant_stem("ArchLinux-2026.06.01-x86_64")
-        self.assertEqual(result, "archlinux-x86_64")
+        self.assertEqual(result, "archlinux")
         _ok(f"Result: {result}")
 
     def test_empty_string(self):

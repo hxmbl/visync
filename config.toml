@@ -28,6 +28,9 @@ debian = "Debian"
 "ubuntu.mint" = "Linux Mint"
 "debian.kali" = "Kali Linux"
 "debian.parrot" = "Parrot Security"
+# Fedora's aarch64 images carry "Fedora" in the volume ID, so without this they
+# are indistinguishable from x86_64 and install/remove cannot target one.
+"fedora.aarch64" = "Fedora ARM"
 
 [standalone_matches]
 # Text matching targets for standalone distros, flavors, and tools
@@ -45,8 +48,13 @@ rescuezilla = "Rescuezilla"
 tails = "Tails"
 tiny11 = "Tiny11"
 
-# Specific desktop flavor/version overrides so regex doesn't grab them poorly
+# Specific desktop flavor/version overrides so regex doesn't grab them poorly.
+# These must mirror the [distros.*] clean_name exactly: install/remove match an
+# identified distro against clean_name, so a missing entry here makes a
+# configured distro impossible to remove (test_verify_consistency_enforces this).
 fedora-kde = "Fedora KDE"
+fedora-arm = "Fedora ARM"
+ubuntu-desktop = "Ubuntu Desktop"
 ubuntu-server = "Ubuntu Server"
 
 ###################################

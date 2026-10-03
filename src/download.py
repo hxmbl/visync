@@ -871,18 +871,16 @@ def _cleanup_old_versions(new_iso: Path, drive_root: Path | None = None) -> None
             return
 
         target_dir = new_iso.parent
-        new_stem_lower = new_stem.lower()
 
         for iso_path in find_installed_isos(target_dir):
             if iso_path == new_iso:
                 continue
 
             try:
-                # Quick filename-based filter: same distro prefix
-                old_name_lower = iso_path.name.lower()
-                # Check if filename starts with the same stem prefix
-                if new_stem_lower and not old_name_lower.startswith(
-                    new_stem_lower.split("-")[0]
+                # Cheap pre-filter on the filename key, so we only pay for a
+                # volume-ID read on plausible candidates.
+                if not same_variant_prefix(
+                    new_stem, _filename_variant_key(iso_path.name)
                 ):
                     continue
 
@@ -950,68 +948,93 @@ def _sweep_old_versions(drive_root: Path, clean: bool = False) -> None:
                 info(f"Would remove old {distro} {version}: {iso_path.name}")
 
 
-def _variant_stem(volume_id: str) -> str:
-    """Extract a stable variant stem from a volume ID by removing version-like tokens.
+# Tokens that identify the architecture rather than the distro variant. They are
+# dropped from variant keys so a rebuild for a different arch is treated as the
+# same variant. Mirrors _ARCH_TOKEN_RE in verify.py.
+#
+# The arch name is bracketed by separator classes rather than \b because
+# filenames glue it to underscores ("pop-os_24.04_amd64_generic_24.iso"), where a
+# trailing underscore counts as a word character and \bamd64\b would not match.
+_ARCH_IN_KEY_RE = re.compile(
+    r"(?:(?<=^)|(?<=[\s_\-.]))(?:x86[_-]?64|amd64|aarch64|arm64|armhfp"
+    r"|i[36]86|riscv64|x86)(?=[\s_\-.]|$)",
+    re.IGNORECASE,
+)
+# Version tokens: pure numbers, optionally dotted, tolerating a trailing
+# separator left behind by a stripped arch token ("live-1.7.").
+_VERSION_IN_KEY_RE = re.compile(r"^\d+(?:\.\d+)*\.?$")
+# Release-type words that appear in volume IDs but never distinguish a variant.
+_RELEASE_WORD_RE = re.compile(
+    r"^(?:lts|esd|point|pre|rc|beta|alpha|rc\d*)$", re.IGNORECASE
+)
 
-    Version tokens are segments that start with a digit (e.g. '44', '24.04.4').
-    Architecture tokens like 'x86_64' and 'amd64' are preserved because they start
-    with a letter, even though they contain digits. Consecutive separators
-    (from removed version tokens) are collapsed into a single hyphen.
+
+def variant_key(text: str) -> str:
+    """Derive a stable distro-variant identity from arbitrary identifying text.
+
+    Accepts either an ISO filename or an ISO 9660 volume ID and reduces both to
+    the same distro+variant key, so two versions of one variant match while
+    distinct variants (desktop vs server, KDE vs Workstation) never do.
+
+    Architecture tokens, version tokens, and release-type words are removed, and
+    all separator styles collapse to single hyphens. Unifying the two former
+    implementations mattered because they disagreed: the volume-ID path kept
+    ``amd64`` (its "protect the underscore" step is a no-op for every arch
+    except x86_64) while the filename path stripped it, producing keys such as
+    ``pop_os-amd64`` versus ``pop-os-generic``. That mismatch made the
+    cleanup's filename prefix filter reject every Pop!_OS candidate, so old
+    builds were never removed.
 
     Examples:
-        'Fedora-E-dvd-x86_64-44'         → 'fedora-e-dvd-x86_64'
-        'Fedora-KDE-Live-44'             → 'fedora-kde-live'
-        'Ubuntu-Server 24.04.4 LTS amd64' → 'ubuntu-server-amd64'
+        'Pop_OS 24.04 amd64'                 -> 'pop-os'
+        'pop-os_24.04_amd64_generic_24.iso'  -> 'pop-os-generic'
+        'Ubuntu-Server 26.04.1 LTS amd64'    -> 'ubuntu-server'
+        'ubuntu-24.04.1-live-server-amd64.iso' -> 'ubuntu-live-server'
     """
-    import re as _re
-
-    # Temporarily protect architecture names that contain underscores
-    # (e.g. x86_64) by replacing the underscore with a placeholder
-    protected = volume_id
-    arch_patterns = _re.findall(
-        r"\b(x86_\d+|amd\d+|i\d86|arm\w*)\b", volume_id, _re.IGNORECASE
-    )
-    for arch in arch_patterns:
-        safe_arch = arch.replace("_", "\ue000")
-        protected = protected.replace(arch, safe_arch, 1)
-
-    tokens = _re.split(r"([\s\-_]+)", protected)
-    cleaned = []
-    for token in tokens:
-        if _re.match(r"^[\s\-_]+$", token):
-            cleaned.append(token)
-            continue
-        # Remove tokens that start with a digit (version numbers)
-        if token and token[0].isdigit():
-            continue
-        cleaned.append(token)
-
-    stem = "".join(cleaned)
-    stem = stem.replace("\ue000", "_")
-    stem = _re.sub(r"\b(lts|esd|point)\b", "", stem, flags=_re.IGNORECASE)
-    stem = _re.sub(r"[\s\-]+", "-", stem).strip(" -_")
-    return stem.lower()
-
-
-def _filename_variant_key(filename: str) -> str:
-    """Derive a variant identity from a filename: distro+variant tokens only.
-
-    Architecture, version, and build tokens are stripped so that
-    'ubuntu-24.04.1-live-server-amd64.iso' and 'ubuntu-26.04-live-server-amd64.iso'
-    share a key while desktop and server variants stay distinct.
-    """
-    from src.verify import _ARCH_TOKEN_RE
-
-    stem = re.sub(r"\.(iso|img)$", "", filename, flags=re.IGNORECASE)
-    stem = _ARCH_TOKEN_RE.sub("-", stem)
+    stem = re.sub(r"\.(iso|img)$", "", text, flags=re.IGNORECASE)
+    # Remove arch tokens with their surrounding separator so "…-amd64" does not
+    # leave a dangling hyphen, then drop standalone version and release words.
+    stem = _ARCH_IN_KEY_RE.sub(" ", stem)
     tokens = []
     for token in re.split(r"[\s_\-]+", stem.lower()):
         if not token:
             continue
-        if re.fullmatch(r"\d+(?:\.\d+)*", token):
+        if _VERSION_IN_KEY_RE.match(token):
+            continue
+        if _RELEASE_WORD_RE.fullmatch(token):
             continue
         tokens.append(token)
     return "-".join(tokens)
+
+
+def _variant_stem(volume_id: str) -> str:
+    """Variant key for an ISO 9660 volume ID. Thin alias of variant_key()."""
+    return variant_key(volume_id)
+
+
+def _filename_variant_key(filename: str) -> str:
+    """Variant key for a filename. Thin alias of variant_key()."""
+    return variant_key(filename)
+
+
+def same_variant_prefix(key_a: str, key_b: str) -> bool:
+    """Cheap pre-filter: could two keys plausibly be the same variant?
+
+    Used to avoid reading a volume ID from every ISO on the drive. Both sides
+    are normalised keys, and the check keeps the original "filename starts with
+    the first token" semantics: one leading token being a prefix of the other is
+    enough to proceed. Exact equality alone would be too strict — the volume ID
+    of an Arch ISO is ``ARCH_202610`` (key ``arch``) while its filename key is
+    ``archlinux``, and requiring equality would silently stop cleanup.
+
+    Normalising both sides is the fix: the previous raw comparison rejected
+    ``pop_os`` versus ``pop-os`` because of the separator mismatch.
+    """
+    if not key_a or not key_b:
+        return True
+    first_a = key_a.split("-", 1)[0]
+    first_b = key_b.split("-", 1)[0]
+    return first_a.startswith(first_b) or first_b.startswith(first_a)
 
 
 def _check_distro(

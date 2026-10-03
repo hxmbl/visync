@@ -13,6 +13,7 @@ import time
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -1328,3 +1329,382 @@ class TestRemovedDistros(unittest.TestCase):
         self.assertIn("NOTE: Omarchy was removed", text)
         self.assertIn("iso.omarchy.org", text)
         print("removal records the reason and a re-add condition")
+
+
+# ── Distro identity: variant keys and config/name consistency ────────────────
+
+ISO_VID = 32808
+
+
+def _make_iso(path: Path, volume_id: str = "", size: int = 4096) -> Path:
+    """Write a file carrying an ISO 9660 volume ID at the PVD offset.
+
+    *size* must exceed ISO_VID or the label is written past the buffer end and
+    the resulting file reads back as having no volume ID.
+    """
+    size = max(size, ISO_VID + 64)
+    buf = bytearray(size)
+    label = volume_id.encode("ascii")[:32]
+    if label:
+        buf[ISO_VID : ISO_VID + len(label)] = label
+    path.write_bytes(bytes(buf))
+    return path
+
+
+class TestVariantKey(unittest.TestCase):
+    """_variant_stem and _filename_variant_key disagreed about architecture
+    tokens, so a volume-ID key never matched its own filename. That silently
+    disabled old-version cleanup for Pop!_OS. Unified into variant_key()."""
+
+    def test_arch_and_version_tokens_are_stripped(self):
+        from src.download import variant_key
+
+        cases = {
+            "Pop_OS 24.04 amd64": "pop-os",
+            "ARCH_202610": "arch",
+            "OMARCHY_202608": "omarchy",
+            "Fedora-E-dvd-x86_64-44": "fedora-e-dvd",
+            "Fedora-KDE-Live-44": "fedora-kde-live",
+            "Ubuntu-Server 26.04.1 LTS amd64": "ubuntu-server",
+            "pop-os_24.04_amd64_generic_24.iso": "pop-os-generic",
+            "archlinux-2026.10.01-x86_64.iso": "archlinux",
+            "tails-amd64-7.14.img": "tails",
+            "ipxe.iso": "ipxe",
+        }
+        for raw, expected in cases.items():
+            with self.subTest(text=raw):
+                self.assertEqual(variant_key(raw), expected)
+
+    def test_arch_token_after_underscore_is_stripped(self):
+        """amd64 glued to underscores must still be recognised."""
+        from src.download import variant_key
+
+        self.assertNotIn("amd64", variant_key("pop-os_24.04_amd64_generic_24.iso"))
+
+    def test_thin_aliases_agree(self):
+        from src.download import _filename_variant_key, _variant_stem, variant_key
+
+        for raw in ("Fedora-KDE-Live-44", "tails-amd64-7.14.img"):
+            with self.subTest(text=raw):
+                self.assertEqual(_variant_stem(raw), variant_key(raw))
+                self.assertEqual(_filename_variant_key(raw), variant_key(raw))
+
+    def test_distinct_variants_stay_distinct(self):
+        from src.download import variant_key
+
+        pairs = [
+            ("Ubuntu 26.04.1 LTS amd64", "Ubuntu-Server 26.04.1 LTS amd64"),
+            ("Fedora-E-dvd-x86_64-44", "Fedora-KDE-Live-44"),
+        ]
+        for a, b in pairs:
+            with self.subTest(pair=(a, b)):
+                self.assertNotEqual(variant_key(a), variant_key(b))
+
+    def test_prefix_filter_matches_pop_os_vid_against_filename(self):
+        """The bug this fixes: 'pop_os' vs 'pop-os' rejected every candidate."""
+        from src.download import same_variant_prefix, variant_key
+
+        vid_key = variant_key("Pop_OS 24.04 amd64")
+        name_key = variant_key("pop-os_24.03_amd64_generic_23.iso")
+        self.assertTrue(same_variant_prefix(vid_key, name_key))
+
+    def test_prefix_filter_still_permissive_for_arch(self):
+        """Volume key 'arch' vs filename key 'archlinux' must still proceed."""
+        from src.download import same_variant_prefix, variant_key
+
+        self.assertTrue(
+            same_variant_prefix(
+                variant_key("ARCH_202610"),
+                variant_key("archlinux-2026.09.01-x86_64.iso"),
+            )
+        )
+
+    def test_prefix_filter_rejects_unrelated(self):
+        from src.download import same_variant_prefix
+
+        self.assertFalse(same_variant_prefix("fedora-kde-live", "archlinux"))
+
+    def test_empty_keys_are_permissive(self):
+        from src.download import same_variant_prefix
+
+        self.assertTrue(same_variant_prefix("", "anything"))
+
+
+class TestCleanupDeletionSafety(unittest.TestCase):
+    """Deletion-focused: cleanup runs unlink(), so these pin the decisions."""
+
+    def _drive(self, tmpdir: str) -> Path:
+        return Path(tmpdir)
+
+    def test_cleanup_removes_older_pop_os_build(self):
+        """Pop!_OS cleanup was fully broken; this is the regression."""
+        from src.download import _cleanup_old_versions
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            drive = self._drive(tmpdir)
+            old = _make_iso(
+                drive / "pop-os_24.03_amd64_generic_23.iso", "Pop_OS 24.03 amd64"
+            )
+            new = _make_iso(
+                drive / "pop-os_24.04_amd64_generic_24.iso", "Pop_OS 24.04 amd64"
+            )
+
+            _cleanup_old_versions(new, drive)
+
+            self.assertFalse(old.exists(), "older Pop!_OS build must be removed")
+            self.assertTrue(new.exists(), "newest build must survive")
+
+    def test_cleanup_keeps_different_variants(self):
+        """Desktop and server must never be treated as the same variant."""
+        from src.download import _cleanup_old_versions
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            drive = self._drive(tmpdir)
+            server = _make_iso(
+                drive / "ubuntu-26.04.1-live-server-amd64.iso",
+                "Ubuntu-Server 26.04.1 LTS amd64",
+            )
+            desktop = _make_iso(
+                drive / "ubuntu-26.04.1-desktop-amd64.iso",
+                "Ubuntu 26.04.1 LTS amd64",
+            )
+            _cleanup_old_versions(desktop, drive)
+            self.assertTrue(server.exists(), "live-server ISO must survive")
+            self.assertTrue(desktop.exists())
+
+    def test_cleanup_keeps_fedora_netinst_and_kde(self):
+        from src.download import _cleanup_old_versions
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            drive = self._drive(tmpdir)
+            netinst = _make_iso(
+                drive / "Fedora-Everything-netinst-x86_64-44-1.7.iso",
+                "Fedora-E-dvd-x86_64-44",
+            )
+            kde = _make_iso(
+                drive / "Fedora-KDE-Desktop-Live-44-1.7.x86_64.iso",
+                "Fedora-KDE-Live-44",
+            )
+            _cleanup_old_versions(kde, drive)
+            self.assertTrue(
+                netinst.exists(), "netinst must not be swept by KDE cleanup"
+            )
+            self.assertTrue(kde.exists())
+
+    def test_cleanup_removes_older_build_of_same_variant(self):
+        from src.download import _cleanup_old_versions
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            drive = self._drive(tmpdir)
+            old = _make_iso(
+                drive / "Fedora-KDE-Desktop-Live-43-1.6.x86_64.iso",
+                "Fedora-KDE-Live-43",
+            )
+            new = _make_iso(
+                drive / "Fedora-KDE-Desktop-Live-44-1.7.x86_64.iso",
+                "Fedora-KDE-Live-44",
+            )
+            _cleanup_old_versions(new, drive)
+            self.assertFalse(old.exists())
+            self.assertTrue(new.exists())
+
+    def test_cleanup_never_touches_unidentified_isos(self):
+        from src.download import _cleanup_old_versions
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            drive = self._drive(tmpdir)
+            keeper = _make_iso(drive / "mystery-boot-2026.iso")
+            new = _make_iso(
+                drive / "Fedora-KDE-Desktop-Live-44-1.7.x86_64.iso",
+                "Fedora-KDE-Live-44",
+            )
+            _cleanup_old_versions(new, drive)
+            self.assertTrue(keeper.exists(), "unidentifiable ISO must survive")
+
+    def test_sweep_groups_by_variant_and_keeps_newest(self):
+        from src.download import _sweep_old_versions
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            drive = self._drive(tmpdir)
+            f43 = _make_iso(
+                drive / "Fedora-Workstation-Live-x86_64-43-1.6.iso",
+                "Fedora-E-dvd-x86_64-43",
+            )
+            f44 = _make_iso(
+                drive / "Fedora-Workstation-Live-x86_64-44-1.7.iso",
+                "Fedora-E-dvd-x86_64-44",
+            )
+            kde = _make_iso(
+                drive / "Fedora-KDE-Desktop-Live-44-1.7.x86_64.iso",
+                "Fedora-KDE-Live-44",
+            )
+            _sweep_old_versions(drive, clean=True)
+            self.assertFalse(f43.exists())
+            self.assertTrue(f44.exists())
+            self.assertTrue(kde.exists())
+
+    def test_sweep_dry_run_deletes_nothing(self):
+        from src.download import _sweep_old_versions
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            drive = self._drive(tmpdir)
+            f43 = _make_iso(
+                drive / "Fedora-Workstation-Live-x86_64-43-1.6.iso",
+                "Fedora-E-dvd-x86_64-43",
+            )
+            _make_iso(
+                drive / "Fedora-Workstation-Live-x86_64-44-1.7.iso",
+                "Fedora-E-dvd-x86_64-44",
+            )
+            _sweep_old_versions(drive, clean=False)
+            self.assertTrue(f43.exists())
+
+
+class TestConfigNameConsistency(unittest.TestCase):
+    """install/remove match an identified distro against clean_name, so every
+    configured clean_name must be reachable from identify_distro."""
+
+    SAMPLES: ClassVar[dict[str, tuple[str, str]]] = {
+        "Fedora": (
+            "Fedora-E-dvd-x86_64-44",
+            "Fedora-Everything-netinst-x86_64-44-1.7.iso",
+        ),
+        "FedoraKDE": (
+            "Fedora-KDE-Live-44",
+            "Fedora-KDE-Desktop-Live-44-1.7.x86_64.iso",
+        ),
+        "FedoraARM": (
+            "Fedora-Workstation-Live-aarch64-44",
+            "Fedora-Workstation-Live-44-1.7.aarch64.iso",
+        ),
+        "ArchLinux": ("ARCH_202610", "archlinux-2026.10.01-x86_64.iso"),
+        "UbuntuServer": (
+            "Ubuntu-Server 26.04.1 LTS amd64",
+            "ubuntu-26.04.1-live-server-amd64.iso",
+        ),
+        "UbuntuDesktop": (
+            "Ubuntu 26.04.1 LTS amd64",
+            "ubuntu-26.04.1-desktop-amd64.iso",
+        ),
+        "ParrotSecurity": ("Parrot", "Parrot-security-7.4_amd64.iso"),
+        "NixOS": ("NIXOS_26.05_x86_64", "nixos-minimal-26.05.11045-x86_64-linux.iso"),
+        "NixOSGraphical": (
+            "NIXOS_26.05_x86_64",
+            "nixos-graphical-26.05.11045-x86_64-linux.iso",
+        ),
+        "PopOS": ("Pop_OS 24.04 amd64", "pop-os_24.04_amd64_generic_24.iso"),
+        "Tails": ("", "tails-amd64-7.14.img"),
+    }
+
+    def test_every_clean_name_is_identifiable(self):
+        from src.finder import identify_distro
+
+        cfg = load_config()
+        for entry_id, settings in sorted(cfg["distros"].items()):
+            with self.subTest(entry=entry_id):
+                self.assertIn(entry_id, self.SAMPLES, "add a sample for this entry")
+                vid, filename = self.SAMPLES[entry_id]
+                self.assertEqual(
+                    identify_distro(vid, filename),
+                    settings["clean_name"],
+                    f"{entry_id}: identify_distro must return clean_name "
+                    f"{settings['clean_name']!r} or install/remove cannot target it",
+                )
+
+    def test_fedora_x86_is_not_labelled_arm(self):
+        from src.finder import identify_distro
+
+        self.assertEqual(
+            identify_distro(
+                "Fedora-E-dvd-x86_64-44", "Fedora-Everything-netinst-x86_64-44-1.7.iso"
+            ),
+            "Fedora",
+        )
+        self.assertEqual(
+            identify_distro(
+                "Fedora-Workstation-Live-x86_64-44",
+                "Fedora-Workstation-Live-44-1.7.x86_64.iso",
+            ),
+            "Fedora",
+        )
+
+    def test_ubuntu_desktop_and_server_are_distinct(self):
+        from src.finder import identify_distro
+
+        self.assertEqual(
+            identify_distro(
+                "Ubuntu 26.04.1 LTS amd64", "ubuntu-26.04.1-desktop-amd64.iso"
+            ),
+            "Ubuntu Desktop",
+        )
+        self.assertEqual(
+            identify_distro(
+                "Ubuntu-Server 26.04.1 LTS amd64",
+                "ubuntu-26.04.1-live-server-amd64.iso",
+            ),
+            "Ubuntu Server",
+        )
+
+    def test_standalone_specificity_does_not_depend_on_toml_order(self):
+        """Specificity is decided by keyword length, not config line order."""
+        from src import finder
+
+        cfg = finder.load_config()
+        generic = {"nixos", "nixos-minimal", "nixos-graphical"}
+        reordered = {k: v for k, v in cfg["standalone_matches"].items() if k in generic}
+        reordered = dict(sorted(reordered.items(), key=lambda kv: len(kv[0])))
+        reordered.update(
+            {k: v for k, v in cfg["standalone_matches"].items() if k not in generic}
+        )
+        cfg["standalone_matches"] = reordered
+        finder._CONFIG_CACHE = cfg
+        try:
+            self.assertEqual(
+                finder.identify_distro(
+                    "NIXOS_26.05_x86_64", "nixos-graphical-26.05-x86_64-linux.iso"
+                ),
+                "NixOS Graphical",
+            )
+            self.assertEqual(
+                finder.identify_distro(
+                    "NIXOS_26.05_x86_64", "nixos-minimal-26.05-x86_64-linux.iso"
+                ),
+                "NixOS Minimal",
+            )
+        finally:
+            finder._CONFIG_CACHE = None
+
+
+class TestQueryNormalisation(unittest.TestCase):
+    def test_separator_styles_resolve_to_one_entry(self):
+        from src.pm import resolve_distro
+
+        cfg = load_config()
+        for query in (
+            "ubuntu-desktop",
+            "ubuntu_desktop",
+            "Ubuntu Desktop",
+            "UbuntuDesktop",
+            "ubuntudesktop",
+        ):
+            with self.subTest(query=query):
+                self.assertEqual(resolve_distro(query, cfg), "UbuntuDesktop")
+
+    def test_ambiguous_queries_are_still_refused(self):
+        from src.pm import matching_distros
+
+        cfg = load_config()
+        for query in ("ubuntu", "u"):
+            with self.subTest(query=query):
+                entry_id, partials = matching_distros(query, cfg)
+                self.assertIsNone(entry_id)
+                self.assertGreater(len(partials), 1)
+
+    def test_empty_query_returns_nothing(self):
+        from src.pm import matching_distros, resolve_distro
+
+        cfg = load_config()
+        for query in ("", "   ", "!!!"):
+            with self.subTest(query=query):
+                self.assertIsNone(resolve_distro(query, cfg))
+                self.assertEqual(matching_distros(query, cfg), (None, []))

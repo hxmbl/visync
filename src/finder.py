@@ -295,6 +295,30 @@ def keyword_hit(keyword: str, text: str) -> bool:
     return re.search(rf"(?<!\w){re.escape(kw)}(?!\w)", _norm_tokens(text)) is not None
 
 
+def keyword_hit_loose(keyword: str, text: str) -> bool:
+    """Whole-token match of *keyword* with tokens allowed to be non-adjacent.
+
+    Needed where upstream inserts a version between the words: Ubuntu's volume
+    ID is ``Ubuntu 26.04.1 LTS amd64`` and its filename
+    ``ubuntu-26.04.1-desktop-amd64.iso``, so the keyword ``ubuntu-desktop``
+    never appears as consecutive tokens and the strict matcher cannot see it.
+    Every token of the keyword must still be present as a whole token, and in
+    order, so ``ubuntu-desktop`` does not match a Linux Mint desktop ISO.
+    """
+    tokens = _norm_tokens(keyword).split()
+    if not tokens:
+        return False
+    haystack = _norm_tokens(text).split()
+    position = 0
+    for token in tokens:
+        while position < len(haystack) and haystack[position] != token:
+            position += 1
+        if position == len(haystack):
+            return False
+        position += 1
+    return True
+
+
 def identify_distro(volume_id: str, file_name: str) -> str:
     """Match the OS distribution using a cascading hybrid approach.
 
@@ -308,10 +332,24 @@ def identify_distro(volume_id: str, file_name: str) -> str:
 
     config = load_config()
 
-    # Check standalone matches first — they're more specific than base distros
+    # Check standalone matches first — they're more specific than base distros.
+    # Tried most-specific first: the raw TOML order is what decided specificity
+    # before, so reordering two lines silently changed which name won.
     standalone_matches = config.get("standalone_matches", {})
-    for keyword, clean_name in standalone_matches.items():
+    for keyword, clean_name in sorted(
+        standalone_matches.items(), key=lambda kv: -len(_norm_tokens(kv[0]))
+    ):
         if keyword_hit(keyword, vol_lower) or keyword_hit(keyword, file_lower):
+            return clean_name
+    # Second pass for keywords upstream splits with a version in the middle
+    # ("ubuntu-desktop" vs "ubuntu-26.04.1-desktop-amd64.iso"). Still whole-token
+    # and still longest-first, so 'ubuntu-desktop' cannot be beaten by 'pop'.
+    for keyword, clean_name in sorted(
+        standalone_matches.items(), key=lambda kv: -len(_norm_tokens(kv[0]))
+    ):
+        if keyword_hit_loose(keyword, vol_lower) or keyword_hit_loose(
+            keyword, file_lower
+        ):
             return clean_name
 
     base_distros = config.get("base_distros", {})
