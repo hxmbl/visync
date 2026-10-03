@@ -128,7 +128,7 @@ def _mount_device(dev: str, detected: list[Path]) -> None:
         )
         if mount_dir.is_dir() and any(mount_dir.iterdir()):
             detected.append(mount_dir)
-    except Exception:
+    except Exception:  # noqa: S110 - mount without privileges fails; detection continues
         pass
     finally:
         if not detected or not mount_dir.is_dir() or not any(mount_dir.iterdir()):
@@ -165,7 +165,7 @@ def _udisksctl_mount(dev: str) -> Path | None:
                 return Path(findmnt.stdout.strip().splitlines()[0])
     except FileNotFoundError:
         pass  # udisksctl not installed
-    except Exception:
+    except Exception:  # noqa: S110 - unmountable device is simply not a Ventoy drive
         pass
     return None
 
@@ -252,7 +252,7 @@ def find_ventoy_drives() -> list[Path]:
                             detected_paths.append(mount_point)
                         else:
                             _mount_device(dev, detected_paths)
-                except Exception:
+                except Exception:  # noqa: S112 - try the next candidate device
                     continue
 
     elif system == "Darwin":
@@ -447,7 +447,7 @@ def read_iso_metadata(drive_root: Path, filename: str) -> dict | None:
     metadata_dir = drive_root / ".visync" / "metadata"
     meta_file = metadata_dir / f"{filename}.json"
     try:
-        with open(meta_file, "r") as f:
+        with open(meta_file) as f:
             data = json.load(f)
     except (json.JSONDecodeError, OSError):
         return None

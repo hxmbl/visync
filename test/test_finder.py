@@ -7,7 +7,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from visync.finder import *
+from visync.finder import (
+    find_installed_isos,
+    find_installed_isos_formatted,
+    find_ventoy_drives,
+    get_iso_volume_id,
+)
 
 
 def _detect_ventoy() -> tuple[bool, list[Path]]:

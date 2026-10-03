@@ -155,8 +155,35 @@ class TestDryRunGatesClean(unittest.TestCase):
 
 
 class _RangeServer(BaseHTTPRequestHandler):
+    """Minimal byte-range server. Emits Content-Range so the client's range
+    validation can be exercised, and lets subclasses lie about it."""
+
     data = b""
     truncate_at = None  # bytes to serve for the SECOND range before clean EOF
+
+    # Set on subclasses to make the server misreport the range it served.
+    # content_range_fn receives (start, end) and returns the Content-Range to
+    # emit; the sentinel below omits the header entirely.
+    content_range_fn = None
+    OMIT = object()
+
+    def _serve(self, start, end, chunk):
+        self.send_response(206)
+        self.send_header("Content-Length", str(len(chunk)))
+        override = type(self).content_range_fn
+        value = (
+            f"bytes {start}-{end - 1}/{len(self.data)}"
+            if override is None
+            else override(start, end)
+        )
+        if value is not type(self).OMIT:
+            self.send_header("Content-Range", value)
+        self.end_headers()
+        try:
+            self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            # The client rejects a bad range and hangs up; that is the point.
+            self.close_connection = True
 
     def do_GET(self):
         spec = self.headers.get("Range", "")[6:]
@@ -164,17 +191,10 @@ class _RangeServer(BaseHTTPRequestHandler):
         start, end = int(start_s), int(end_s) + 1
         chunk = self.data[start:end]
         if type(self).truncate_at is not None and start == type(self).truncate_at[0]:
-            chunk = chunk[: type(self).truncate_at[1]]
-            self.send_response(206)
-            self.send_header("Content-Length", str(len(chunk)))
-            self.end_headers()
-            self.wfile.write(chunk)
+            self._serve(start, end, chunk[: type(self).truncate_at[1]])
             self.close_connection = True
             return
-        self.send_response(self.status_code if hasattr(self, "status_code") else 206)
-        self.send_header("Content-Length", str(len(chunk)))
-        self.end_headers()
-        self.wfile.write(chunk)
+        self._serve(start, end, chunk)
 
     def log_message(self, *a):
         pass
@@ -592,6 +612,116 @@ class TestSafeFilename(unittest.TestCase):
         self.assertEqual(_safe_filename(".."), "")
 
 
+class TestScrapeFilenamesAreSanitised(unittest.TestCase):
+    """Every strategy that scrapes a filename must run it through _safe_filename.
+
+    direct_match, popos_api and tails_api were checked; the two nested
+    directory-walking strategies returned the regex capture verbatim, so a
+    listing containing a traversal sequence produced a local path outside the
+    download directory — and a name that cleanup later unlinks.
+
+    _safe_filename's policy is to flatten rather than reject, so these assert
+    the property that matters: the name stays a single harmless segment.
+    """
+
+    def _nested(self, strategy, iso_html, root_html="", **extra):
+        settings = {
+            "strategy": strategy,
+            "base_url": "https://example.com/",
+            "iso_regex": 'href="([^"]+)"',
+            "version_regex": 'href="([^"]+)/"',
+            **extra,
+        }
+        pages = iter([p for p in (root_html, iso_html) if p] or [iso_html])
+        with (
+            patch.object(dl, "ping_mirror", return_value=True),
+            patch.object(dl, "fetch_html", side_effect=lambda *a, **k: next(pages)),
+        ):
+            return dl.process_scraping_strategy("X", settings)
+
+    def _assert_single_segment(self, filename, url):
+        self.assertNotIn("/", filename)
+        self.assertNotIn("\\", filename)
+        self.assertNotIn("..", filename)
+        # The local destination is download_dir / filename, so a single segment
+        # is what keeps the write inside the download directory.
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(Path(tmp, filename).parent, Path(tmp))
+        self.assertNotIn("..", url)
+
+    def test_fedora_nested_flattens_traversal_filename(self):
+        filename, url = self._nested(
+            "fedora_nested",
+            '<a href="../../../../etc/cron.d/x.iso">x</a>',
+            root_html='<a href="44/">44</a>',
+        )
+        self.assertEqual(filename, "x.iso")
+        self._assert_single_segment(filename, url)
+
+    def test_ubuntu_nested_flattens_traversal_filename(self):
+        filename, url = self._nested(
+            "ubuntu_nested",
+            '<a href="../../../pool/evil.iso">x</a>',
+            root_html='<a href="26.04/">26.04</a>',
+        )
+        self.assertEqual(filename, "evil.iso")
+        self._assert_single_segment(filename, url)
+
+    def test_nested_strategies_accept_ordinary_names(self):
+        filename, url = self._nested(
+            "ubuntu_nested",
+            '<a href="ubuntu-26.04.1-desktop-amd64.iso">x</a>',
+            root_html='<a href="26.04.1/">26.04.1</a>',
+        )
+        self.assertEqual(filename, "ubuntu-26.04.1-desktop-amd64.iso")
+        self.assertTrue(url.endswith("ubuntu-26.04.1-desktop-amd64.iso"))
+
+
+class TestSafeVersionSegment(unittest.TestCase):
+    """Scraped release directories must stay a single URL segment."""
+
+    def test_plain_version_kept(self):
+        self.assertEqual(dl._safe_version_segment("26.04.1"), "26.04.1")
+        self.assertEqual(dl._safe_version_segment("44/"), "44")
+        self.assertEqual(dl._safe_version_segment("  26.05  "), "26.05")
+
+    def test_traversal_and_separators_rejected(self):
+        for bad in (
+            "../../pool",
+            "26.04/../../pool",
+            "26.04\\x",
+            "..",
+            ".",
+            "",
+            "26.04?a=b",
+            "26.04#frag",
+            ".hidden",
+        ):
+            with self.subTest(bad=bad):
+                self.assertEqual(dl._safe_version_segment(bad), "")
+
+    def test_traversing_version_is_not_used_for_the_iso_url(self):
+        settings = {
+            "strategy": "ubuntu_nested",
+            "base_url": "https://example.com/",
+            "iso_regex": 'href="([^"]+)"',
+            "version_regex": 'href="([^"]+)/"',
+        }
+        pages = iter(
+            [
+                '<a href="../../evil/">x</a><a href="26.04/">26.04</a>',
+                '<a href="ubuntu.iso">x</a>',
+            ]
+        )
+        with (
+            patch.object(dl, "ping_mirror", return_value=True),
+            patch.object(dl, "fetch_html", side_effect=lambda *a, **k: next(pages)),
+        ):
+            filename, url = dl.process_scraping_strategy("X", settings)
+        self.assertEqual(filename, "ubuntu.iso")
+        self.assertEqual(url, "https://example.com/26.04/ubuntu.iso")
+
+
 # ── M1: hung mirrors cannot freeze or crash the scrape phase ────────────────
 
 
@@ -848,6 +978,81 @@ class TestChunkOverflow(unittest.TestCase):
             self.assertFalse(ok, "oversized response must fail the download")
             if part.exists():
                 self.assertLessEqual(part.stat().st_size, len(payload))
+
+
+class TestContentRangeValidation(unittest.TestCase):
+    """A 206 status alone does not prove the body is the requested range.
+
+    A server that answers every Range with the same 206 slice would otherwise
+    assemble a full-size file from duplicated chunks and satisfy every
+    byte-count check — silent corruption wherever no checksum is configured.
+    """
+
+    def _serve(self, handler_cls):
+        server = HTTPServer(("127.0.0.1", 0), handler_cls)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+
+        def _stop():
+            server.shutdown()
+            thread.join()
+
+        self.addCleanup(_stop)
+        thread.start()
+        return f"http://127.0.0.1:{server.server_address[1]}/x.iso"
+
+    def test_wrong_content_range_fails(self):
+        payload = os.urandom(12 * 1024 * 1024)
+        handler = type(
+            "WrongRange",
+            (_RangeServer,),
+            {
+                "data": payload,
+                # Every chunk claims to be the first one.
+                "content_range_fn": lambda s, e: "bytes 0-4194303/12582912",
+            },
+        )
+        url = self._serve(handler)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            part = Path(tmpdir) / "x.iso.part"
+            ok = _download_chunked(url, part, len(payload), 3, "x.iso")
+            self.assertFalse(ok, "a mismatched Content-Range must fail the download")
+
+    def test_missing_content_range_fails(self):
+        payload = os.urandom(12 * 1024 * 1024)
+        handler = type(
+            "NoRange",
+            (_RangeServer,),
+            {"data": payload, "content_range_fn": lambda s, e: _RangeServer.OMIT},
+        )
+        url = self._serve(handler)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            part = Path(tmpdir) / "x.iso.part"
+            ok = _download_chunked(url, part, len(payload), 3, "x.iso")
+            self.assertFalse(ok, "a 206 with no Content-Range must fail the download")
+
+    def test_malformed_content_range_fails(self):
+        payload = os.urandom(12 * 1024 * 1024)
+        handler = type(
+            "JunkRange",
+            (_RangeServer,),
+            {"data": payload, "content_range_fn": lambda s, e: "bytes all of it"},
+        )
+        url = self._serve(handler)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            part = Path(tmpdir) / "x.iso.part"
+            ok = _download_chunked(url, part, len(payload), 3, "x.iso")
+            self.assertFalse(ok, "an unparsable Content-Range must fail")
+
+    def test_correct_content_range_still_succeeds(self):
+        """The new check must not break well-behaved servers."""
+        payload = os.urandom(12 * 1024 * 1024)
+        handler = type("GoodRange", (_RangeServer,), {"data": payload})
+        url = self._serve(handler)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            part = Path(tmpdir) / "x.iso.part"
+            ok = _download_chunked(url, part, len(payload), 3, "x.iso")
+            self.assertTrue(ok, "an honest range server must still succeed")
+            self.assertEqual(part.read_bytes(), payload, "bytes must match exactly")
 
 
 # ── P1: non-HTTPS download URL fails that distro, not the whole run ─────────
@@ -1824,3 +2029,207 @@ class TestPackagedConfig(unittest.TestCase):
         path = _packaged_config()
         self.assertTrue(path.is_file(), f"resolved config missing: {path}")
         self.assertEqual(path.name, "config.toml")
+
+
+# ── Cleartext exemption: only genuinely unambiguous loopback ─────────────────
+
+
+class TestLoopbackExemption(unittest.TestCase):
+    """require_https lets http:// through for a local mirror used in testing.
+
+    The exemption used to be a string set, so any spelling of 127.0.0.1 that
+    urllib would resolve locally also qualified — including "127.1", the integer
+    form "2130706433", and the IPv4-mapped "::ffff:127.0.0.1". That handed a
+    cleartext exemption to a string the operator did not intend as loopback.
+    """
+
+    def test_intended_loopback_spellings_accepted(self):
+        from visync.net import _is_loopback
+
+        for host in (
+            "localhost",
+            "LOCALHOST",
+            "localhost.",  # fully-qualified form of the same name
+            "mirror.localhost",  # RFC 6761 reserves the whole domain
+            "127.0.0.1",
+            "127.0.0.2",  # the whole 127/8 is loopback
+            "::1",
+            "[::1]",
+        ):
+            with self.subTest(host=host):
+                self.assertTrue(_is_loopback(host))
+
+    def test_ambiguous_spellings_rejected(self):
+        from visync.net import _is_loopback
+
+        for host in (
+            "127.1",
+            "2130706433",
+            "0x7f000001",
+            "0x7f.0.0.1",
+            "0177.0.0.1",
+            "::ffff:127.0.0.1",
+            "::ffff:7f00:1",
+            "localhost.evil.com",
+            "notlocalhost",
+            "evil.com",
+            "",
+            ".",
+            None,
+        ):
+            with self.subTest(host=host):
+                self.assertFalse(_is_loopback(host))
+
+    def test_http_allowed_only_for_loopback(self):
+        from visync.net import require_https
+
+        require_https("https://example.com/x")
+        require_https("http://localhost:8080/x")
+        require_https("http://127.0.0.1/x")
+        for url in (
+            "http://example.com/x",
+            "http://127.1/x",
+            "http://2130706433/x",
+            "http://[::ffff:127.0.0.1]/x",
+            "file:///etc/passwd",
+        ):
+            with self.subTest(url=url):
+                with self.assertRaises(ValueError):
+                    require_https(url)
+
+
+class TestSigningKeyMustBeHttps(unittest.TestCase):
+    """The GPG key was fetched over plain http:// with no scheme check.
+
+    The point of fingerprint pinning is to defeat a key substituted in
+    transit, so fetching that key in cleartext made the pinning decorative for
+    any config that spelled the URL with http://.
+    """
+
+    def test_http_key_url_is_refused_before_any_fetch(self):
+        from visync.verify import _import_key_then_verify
+
+        with patch("visync.verify.urlopen") as mu:
+            with self.assertRaises(ChecksumUnavailable) as ctx:
+                _import_key_then_verify(
+                    Path("/tmp/CHECKSUM"),
+                    "http://deb.parrot.sh/parrot/misc/archive.gpg",
+                    "B711822346552E4D92DA02DF7A8286AF0E81EE4A",
+                )
+        mu.assert_not_called()
+        self.assertIn("non-HTTPS", str(ctx.exception))
+
+    def test_https_key_url_is_still_fetched(self):
+        from visync.verify import _import_key_then_verify
+
+        def fake_run(cmd, **kw):
+            r = MagicMock()
+            r.returncode = 1  # import/verify failure is not what this test is about
+            return r
+
+        with (
+            patch("visync.verify.subprocess.run", side_effect=fake_run),
+            patch("visync.verify.shutil.which", return_value="/usr/bin/gpg"),
+            patch("visync.verify.urlopen") as mu,
+        ):
+            resp = MagicMock()
+            resp.read.return_value = b"key"
+            resp.__enter__ = lambda s: s
+            resp.__exit__ = MagicMock(return_value=False)
+            mu.return_value = resp
+            result = _import_key_then_verify(
+                Path("/tmp/CHECKSUM"),
+                "https://deb.parrot.sh/parrot/misc/archive.gpg",
+                "B711822346552E4D92DA02DF7A8286AF0E81EE4A",
+            )
+        mu.assert_called_once()
+        self.assertFalse(result)
+
+
+# ── Ctrl-C must not orphan partial downloads ─────────────────────────────────
+
+
+class TestInterruptDiscardsPartial(unittest.TestCase):
+    """Cancelling a download left the .part file on disk.
+
+    The handler that was supposed to clean up lived in download.py's
+    __main__ block, which the CLI never executes (entry point is
+    visync.main:app), so it had been dead code since it was written. Every
+    other failure path already unlinked the partial; cancellation was the one
+    that did not, and on a Ventoy drive the bytes are wasted space the next ISO
+    needs.
+    """
+
+    def _run(self, exc):
+        config = {
+            "iso": {},
+            "distros": {"X": {"clean_name": "X", "strategy": "direct_match"}},
+        }
+        with (
+            patch.object(dl, "load_config", return_value=config),
+            patch.object(dl, "visync_watchdog"),
+            patch.object(dl, "_sweep_old_versions"),
+            patch.object(
+                dl,
+                "_check_distro",
+                return_value=DistroCheck(
+                    "X", "X", "x.iso", SyncStatus.STALE, "https://example.com/x.iso"
+                ),
+            ),
+            patch.object(dl, "download_iso", side_effect=exc),
+        ):
+            return dl.sync_all_configured_distros(
+                dry_run=False,
+                drive_override=Path(tempfile.gettempdir()),
+                use_buffer=True,
+                config_path=None,
+            )
+
+    def test_keyboard_interrupt_removes_the_part_file(self):
+        with tempfile.TemporaryDirectory() as staging:
+            written = {}
+
+            def fake_download(url, dest, **kwargs):
+                part = Path(dest).with_suffix(Path(dest).suffix + ".part")
+                part.write_bytes(b"\0" * 4096)
+                written["part"] = part
+                raise KeyboardInterrupt
+
+            with patch("visync.download.DEFAULT_STAGING_DIR", Path(staging)):
+                with self.assertRaises(KeyboardInterrupt):
+                    self._run(fake_download)
+            self.assertTrue(written["part"].name.endswith(".part"))
+            self.assertFalse(
+                written["part"].exists(), "the interrupted partial must be removed"
+            )
+
+    def test_unlink_failure_does_not_mask_the_interrupt(self):
+        """A read-only staging dir must not turn Ctrl-C into a crash."""
+
+        def fake_download(url, dest, **kwargs):
+            part = Path(dest).with_suffix(Path(dest).suffix + ".part")
+            part.write_bytes(b"\0" * 16)
+            with patch.object(Path, "unlink", side_effect=OSError("read-only")):
+                raise KeyboardInterrupt
+
+        with tempfile.TemporaryDirectory() as staging:
+            with patch("visync.download.DEFAULT_STAGING_DIR", Path(staging)):
+                with self.assertRaises(KeyboardInterrupt):
+                    self._run(fake_download)
+
+    def test_cli_exits_130_on_interrupt(self):
+        """The CLI turns Ctrl-C into a clean exit(130), not a traceback."""
+        from typer.testing import CliRunner
+
+        from visync.main import app
+
+        with (
+            patch("visync.download.download_iso", side_effect=KeyboardInterrupt),
+            patch("visync.download.DEFAULT_STAGING_DIR", Path(tempfile.gettempdir())),
+        ):
+            result = CliRunner().invoke(
+                app,
+                ["--yes", "sync", "--all", "--no-verify", "--no-staging"],
+            )
+        self.assertEqual(result.exit_code, 130, result.output)
+        self.assertNotIn("Traceback", result.output)

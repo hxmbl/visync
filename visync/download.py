@@ -33,7 +33,6 @@ install_safe_opener()
 from visync.output import (
     console,
     error,
-    header,
     info,
     make_download_progress,
     removed,
@@ -117,7 +116,9 @@ def fetch_html(url: str) -> str:
     _debug(f"Fetching {url}")
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=MIRROR_HTTP_TIMEOUT) as response:
+        with urllib.request.urlopen(  # require_https above is the allowlist
+            req, timeout=MIRROR_HTTP_TIMEOUT
+        ) as response:
             html = response.read().decode("utf-8", errors="ignore")
             # Detect bot-protected pages (e.g. Anubis proof-of-work)
             if "Anubis" in html[:1000]:
@@ -147,6 +148,22 @@ def _safe_filename(name: str) -> str:
     if name in ("", ".", ".."):
         return ""
     return name
+
+
+def _safe_version_segment(version: str) -> str:
+    """Keep a scraped version directory usable as exactly one URL segment.
+
+    Release-directory scrapers interpolate the matched version straight into a
+    URL. A listing that yielded "26.04/../../pool" would send the request
+    somewhere the operator never asked for, so only a plain single path segment
+    is accepted; anything with a separator or a dot-prefixed name is dropped.
+    """
+    version = version.strip().strip("/")
+    if not version or version.startswith("."):
+        return ""
+    if "/" in version or "\\" in version or "?" in version or "#" in version:
+        return ""
+    return version
 
 
 NIXOS_RELEASES_S3 = "https://nix-releases.s3.amazonaws.com/"
@@ -254,9 +271,11 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
         if not root_html:
             return fail(f"could not fetch releases index {base_url}")
         versions = [
-            v.strip().rstrip("/")
-            for v in re.findall(version_regex, root_html)
-            if v.strip().rstrip("/")
+            v
+            for v in (
+                _safe_version_segment(v) for v in re.findall(version_regex, root_html)
+            )
+            if v
         ]
         if not versions:
             return fail(f"no version directories matched at {base_url}")
@@ -272,7 +291,11 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
 
         match = re.search(iso_regex, iso_html)
         if match:
-            return match.group(1), f"{iso_dir_url}{match.group(1)}"
+            filename = _safe_filename(match.group(1))
+            if not filename:
+                warn(f"{name} — index page matched an unsafe filename")
+                return fail(f"{iso_dir_url} matched an unsafe filename")
+            return filename, f"{iso_dir_url}{filename}"
         return fail(f"iso_regex matched nothing in {iso_dir_url}")
 
     # Strategy C: Directory Sub-paths for Ubuntu Ecosystem Releases
@@ -284,9 +307,11 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
         if not root_html:
             return fail(f"could not fetch releases index {base_url}")
         versions = [
-            v.strip().rstrip("/")
-            for v in re.findall(version_regex, root_html)
-            if v.strip().rstrip("/")
+            v
+            for v in (
+                _safe_version_segment(v) for v in re.findall(version_regex, root_html)
+            )
+            if v
         ]
         if not versions:
             return fail(f"no version directories matched at {base_url}")
@@ -312,7 +337,11 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
 
         match = re.search(iso_regex, iso_html)
         if match:
-            return match.group(1), f"{iso_dir_url}{match.group(1)}"
+            filename = _safe_filename(match.group(1))
+            if not filename:
+                warn(f"{name} — release page matched an unsafe filename")
+                return fail(f"{iso_dir_url} matched an unsafe filename")
+            return filename, f"{iso_dir_url}{filename}"
         return fail(f"iso_regex matched nothing in {iso_dir_url} (upstream layout?)")
 
     # Strategy D: NixOS channel page — parse version, construct ISO URL
@@ -379,7 +408,9 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
             req = urllib.request.Request(
                 iso_url, method="HEAD", headers={"User-Agent": "Mozilla/5.0"}
             )
-            with urllib.request.urlopen(req, timeout=MIRROR_HTTP_TIMEOUT) as resp:
+            with urllib.request.urlopen(  # require_https above is the allowlist
+                req, timeout=MIRROR_HTTP_TIMEOUT
+            ) as resp:
                 if resp.status == 200:
                     return iso_filename, iso_url
             return fail(f"HEAD probe returned HTTP {resp.status} for {iso_url}")
@@ -549,13 +580,36 @@ def _download_chunked(
                 url,
                 headers={"User-Agent": "Mozilla/5.0", "Range": range_header},
             )
-            with urllib.request.urlopen(req, timeout=60) as resp:
+            with urllib.request.urlopen(  # require_https above is the allowlist
+                req, timeout=60
+            ) as resp:
                 status = getattr(resp, "status", 206)
                 if status != 206:
                     with lock:
                         errors.append(
                             f"Chunk {idx}: server ignored Range request "
                             f"(HTTP {status}, expected 206)"
+                        )
+                    return
+                # A 206 alone does not prove the body is the range we asked for.
+                # Without this, a server answering every Range with the same
+                # 206 slice would assemble a full-size file out of duplicated
+                # chunks and pass every byte-count check. Where a checksum
+                # exists that catches it; where none is configured it would be
+                # silent corruption.
+                content_range = resp.headers.get("Content-Range", "")
+                served = re.fullmatch(
+                    r"bytes (\d+)-(\d+)/(?:(\d+)|\*)", content_range.strip()
+                )
+                if (
+                    not served
+                    or int(served.group(1)) != chunk_start
+                    or int(served.group(2)) != chunk_end
+                ):
+                    with lock:
+                        errors.append(
+                            f"Chunk {idx}: Content-Range {content_range!r} does not "
+                            f"match the requested bytes {chunk_start}-{chunk_end}"
                         )
                     return
                 offset = chunk_start
@@ -649,7 +703,9 @@ def _download_single_stream(
 
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(  # require_https above is the allowlist
+            req, timeout=30
+        ) as resp:
             downloaded = 0
             with make_download_progress() as progress:
                 task = progress.add_task(
@@ -713,11 +769,13 @@ def download_iso(
         req = urllib.request.Request(
             url, method="HEAD", headers={"User-Agent": "Mozilla/5.0"}
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(  # require_https above is the allowlist
+            req, timeout=10
+        ) as resp:
             expected = int(resp.headers.get("Content-Length", 0))
             accept_ranges = resp.headers.get("Accept-Ranges", "")
             ranges_supported = accept_ranges == "bytes"
-    except Exception:
+    except Exception:  # noqa: S110 - HEAD is advisory; unknown size still downloads
         pass
 
     # Disk space check
@@ -738,7 +796,7 @@ def download_iso(
         else:
             info(f"Available disk space: {available / (1024**3):.2f} GiB")
             warn("Content-Length unknown — disk space cannot be verified.")
-    except Exception:
+    except Exception:  # noqa: S110 - disk_usage is best-effort on exotic filesystems
         pass
 
     part_path = dest_path.with_suffix(dest_path.suffix + ".part")
@@ -899,9 +957,9 @@ def _cleanup_old_versions(new_iso: Path, drive_root: Path | None = None) -> None
                         remove_iso_metadata(drive_root, iso_path.name)
             except OSError:
                 warn(f"Could not remove stale file: {iso_path.name}")
-            except Exception:
+            except Exception:  # noqa: S110 - never let cleanup abort a sync
                 pass
-    except Exception:
+    except Exception:  # noqa: S110 - cleanup is best-effort
         pass
 
 
@@ -1132,16 +1190,26 @@ def _copy_with_progress(src: Path, dst: Path, filename: str) -> None:
                 progress.update(task, completed=copied)
 
 
-def _cleanup_part_files(*directories: Path) -> None:
-    """Delete any leftover .part files from the given directories."""
-    for directory in directories:
-        if not directory.is_dir():
-            continue
-        for part_file in directory.rglob("*.part"):
-            # Only remove files this tool creates (<name>.iso.part / .img.part)
-            if part_file.suffixes[-2:] not in ([".iso", ".part"], [".img", ".part"]):
-                continue
-            part_file.unlink(missing_ok=True)
+def _discard_partial(part_file: Path, label: str) -> None:
+    """Remove one in-flight .part file, reporting rather than raising on failure.
+
+    Called on the cancellation path, so it must never turn a clean Ctrl-C into a
+    second error.
+
+    This replaced a blanket rglob sweep of every ``*.iso.part`` in the download
+    directory and the drive. That sweep only ever ran from download.py's
+    __main__ block, which the CLI does not execute, and it was the wrong tool
+    anyway: it could delete a partial another visync run had in flight. Downloads
+    are sequential, so there is exactly one partial to clean up.
+    """
+    try:
+        if not part_file.exists():
+            return
+        part_file.unlink()
+    except OSError as e:
+        warn(f"Could not remove partial download {label}: {e}")
+        return
+    info(f"Discarded partial download: {_esc(label)}")
 
 
 def sync_all_configured_distros(
@@ -1307,6 +1375,14 @@ def sync_all_configured_distros(
                     checksums_config=checksums_config,
                     no_verify=no_verify,
                 )
+            except KeyboardInterrupt:
+                # Ctrl-C leaves the partial file behind otherwise. Every other
+                # failure path above unlinks it, and an interrupted download is
+                # no different: the bytes are worthless, and on a Ventoy drive
+                # or in the staging buffer they silently eat space that the next
+                # ISO needs. The user asked to stop, so stop and tidy up.
+                _discard_partial(part_file, latest_filename)
+                raise
             except ValueError as e:
                 error(f"Skipping {latest_filename}: {e}")
                 part_file.unlink(missing_ok=True)
@@ -1366,26 +1442,3 @@ def sync_all_configured_distros(
                 _cleanup_old_versions(drive_dest, ventoy_root)
 
     return download_target_dir, downloaded, unreachable
-
-
-if __name__ == "__main__":
-    header("VISYNC PROTOCOL LOGISTICAL EXTENSION ENGINE")
-    try:
-        sync_all_configured_distros()
-    except KeyboardInterrupt:
-        console.print(
-            "\n[red]✕ Sync canceled by user. Cleaning up partial downloads...[/red]"
-        )
-        _config = load_config()
-        _iso_settings = _config.get("iso", {})
-        _cleanup_targets: list[Path] = []
-        _download_dir = _iso_settings.get("download_dir", "").strip()
-        if _download_dir:
-            _cleanup_targets.append(Path(_download_dir))
-        else:
-            _cleanup_targets.append(DEFAULT_STAGING_DIR)
-        _drives = find_ventoy_drives()
-        if _drives:
-            _cleanup_targets.append(_drives[0])
-        _cleanup_part_files(*_cleanup_targets)
-        raise SystemExit(130)

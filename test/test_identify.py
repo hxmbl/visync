@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from visync.finder import *
+from visync.finder import identify_distro
 
 
 def _section(title: str) -> None:

@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from typer.testing import CliRunner
 
+from visync import main as visync_main
 from visync.main import _get_drives, app
 
 runner = CliRunner()
@@ -74,7 +75,9 @@ class TestInstall(unittest.TestCase):
     ) -> None:
         mock_cfg.return_value = MOCK_CONFIG
         with tempfile.TemporaryDirectory() as tmpdir:
-            result = runner.invoke(app, ["install", "bogus-distro", "--drive", tmpdir])
+            result = runner.invoke(
+                app, ["--yes", "install", "bogus-distro", "--drive", tmpdir]
+            )
             self.assertNotEqual(result.exit_code, 0)
             self.assertIn("Unknown distro", result.stdout)
 
@@ -85,7 +88,7 @@ class TestInstall(unittest.TestCase):
             patch("visync.main.load_config", return_value=MOCK_CONFIG),
         ):
             result = runner.invoke(
-                app, ["install", "archlinux", "--drive", tmpdir, "--dry-run"]
+                app, ["--yes", "install", "archlinux", "--drive", tmpdir, "--dry-run"]
             )
             self.assertEqual(result.exit_code, 0)
             self.assertIn("Would download", result.stdout)
@@ -99,7 +102,7 @@ class TestInstall(unittest.TestCase):
         """Ambiguous install queries must list candidates, not just say unknown."""
         mock_cfg.return_value = MOCK_CONFIG
         with tempfile.TemporaryDirectory() as tmpdir:
-            result = runner.invoke(app, ["install", "u", "--drive", tmpdir])
+            result = runner.invoke(app, ["--yes", "install", "u", "--drive", tmpdir])
             self.assertNotEqual(result.exit_code, 0)
             self.assertIn("Ambiguous distro", result.stdout)
             self.assertIn("Arch Linux", result.stdout)
@@ -115,7 +118,8 @@ class TestInstall(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch("visync.main.Path.home", return_value=Path(tmpdir)):
                 result = runner.invoke(
-                    app, ["install", "archlinux", "--drive", tmpdir, "--dry-run"]
+                    app,
+                    ["--yes", "install", "archlinux", "--drive", tmpdir, "--dry-run"],
                 )
                 self.assertEqual(result.exit_code, 0)
                 self.assertIn("Would download", result.stdout)
@@ -131,7 +135,9 @@ class TestInstall(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             iso = Path(tmpdir) / "archlinux-2026.iso"
             iso.write_bytes(b"\x00" * 1024)
-            result = runner.invoke(app, ["install", "archlinux", "--drive", tmpdir])
+            result = runner.invoke(
+                app, ["--yes", "install", "archlinux", "--drive", tmpdir]
+            )
             self.assertEqual(result.exit_code, 0)
             self.assertIn("already on the drive", result.stdout)
 
@@ -156,7 +162,7 @@ class TestInstall(unittest.TestCase):
             before = state.read_bytes()
 
             result = runner.invoke(
-                app, ["install", "archlinux", "--drive", tmpdir, "--dry-run"]
+                app, ["--yes", "install", "archlinux", "--drive", tmpdir, "--dry-run"]
             )
 
             self.assertEqual(result.exit_code, 0)
@@ -168,7 +174,15 @@ class TestInstall(unittest.TestCase):
     def test_install_file_not_found(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             result = runner.invoke(
-                app, ["install", "-i", "/nonexistent/packages.txt", "--drive", tmpdir]
+                app,
+                [
+                    "--yes",
+                    "install",
+                    "-i",
+                    "/nonexistent/packages.txt",
+                    "--drive",
+                    tmpdir,
+                ],
             )
             self.assertNotEqual(result.exit_code, 0)
             self.assertIn("File not found", result.stdout)
@@ -181,7 +195,15 @@ class TestInstall(unittest.TestCase):
             with patch("visync.main.load_config", return_value=MOCK_CONFIG):
                 result = runner.invoke(
                     app,
-                    ["install", "-i", str(pkg_file), "--drive", tmpdir, "--dry-run"],
+                    [
+                        "--yes",
+                        "install",
+                        "-i",
+                        str(pkg_file),
+                        "--drive",
+                        tmpdir,
+                        "--dry-run",
+                    ],
                 )
                 self.assertEqual(result.exit_code, 0)
                 self.assertIn("Would download 1 distro(s)", result.stdout)
@@ -194,7 +216,15 @@ class TestInstall(unittest.TestCase):
             with patch("visync.main.load_config", return_value=MOCK_CONFIG):
                 result = runner.invoke(
                     app,
-                    ["install", "-i", str(pkg_file), "--drive", tmpdir, "--dry-run"],
+                    [
+                        "--yes",
+                        "install",
+                        "-i",
+                        str(pkg_file),
+                        "--drive",
+                        tmpdir,
+                        "--dry-run",
+                    ],
                 )
                 self.assertEqual(result.exit_code, 0)
                 self.assertIn("Would download 2 distro(s)", result.stdout)
@@ -206,7 +236,7 @@ class TestInstall(unittest.TestCase):
             pkg_file.write_text("bogus1\nbogus2\n")
             with patch("visync.main.load_config", return_value=MOCK_CONFIG):
                 result = runner.invoke(
-                    app, ["install", "-i", str(pkg_file), "--drive", tmpdir]
+                    app, ["--yes", "install", "-i", str(pkg_file), "--drive", tmpdir]
                 )
                 self.assertNotEqual(result.exit_code, 0)
                 self.assertIn("No valid distros", result.stdout)
@@ -230,7 +260,9 @@ class TestRemove(unittest.TestCase):
     ) -> None:
         mock_cfg.return_value = MOCK_CONFIG
         with tempfile.TemporaryDirectory() as tmpdir:
-            result = runner.invoke(app, ["remove", "bogus-distro", "--drive", tmpdir])
+            result = runner.invoke(
+                app, ["--yes", "remove", "bogus-distro", "--drive", tmpdir]
+            )
             self.assertNotEqual(result.exit_code, 0)
             self.assertIn("Unknown distro", result.stdout)
 
@@ -241,7 +273,9 @@ class TestRemove(unittest.TestCase):
     def test_remove_no_files_warns(self, mock_cfg: MagicMock, *_: MagicMock) -> None:
         mock_cfg.return_value = MOCK_CONFIG
         with tempfile.TemporaryDirectory() as tmpdir:
-            result = runner.invoke(app, ["remove", "archlinux", "--drive", tmpdir])
+            result = runner.invoke(
+                app, ["--yes", "remove", "archlinux", "--drive", tmpdir]
+            )
             self.assertEqual(result.exit_code, 0)
             self.assertIn("No files found", result.stdout)
 
@@ -257,7 +291,7 @@ class TestRemove(unittest.TestCase):
             iso = Path(tmpdir) / "archlinux-2026.iso"
             iso.write_bytes(b"\x00" * 1024)
             result = runner.invoke(
-                app, ["remove", "archlinux", "--drive", tmpdir, "--dry-run"]
+                app, ["--yes", "remove", "archlinux", "--drive", tmpdir, "--dry-run"]
             )
             self.assertEqual(result.exit_code, 0)
             self.assertIn("Would remove", result.stdout)
@@ -275,7 +309,7 @@ class TestRemove(unittest.TestCase):
             iso = Path(tmpdir) / "archlinux-2026.iso"
             iso.write_bytes(b"\x00" * 1024)
             result = runner.invoke(
-                app, ["remove", "archlinux", "--drive", tmpdir, "--yes"]
+                app, ["--yes", "remove", "archlinux", "--drive", tmpdir, "--yes"]
             )
             self.assertEqual(result.exit_code, 0)
             self.assertFalse(iso.exists(), "File should be deleted")
@@ -294,7 +328,9 @@ class TestRemove(unittest.TestCase):
             iso = Path(tmpdir) / "archlinux-2026.iso"
             iso.write_bytes(b"\x00" * 1024)
             # No input provided -> confirm() aborts -> file must survive
-            result = runner.invoke(app, ["remove", "archlinux", "--drive", tmpdir])
+            result = runner.invoke(
+                app, ["--yes", "remove", "archlinux", "--drive", tmpdir]
+            )
             self.assertNotEqual(result.exit_code, 0)
             self.assertTrue(iso.exists(), "File must survive aborted confirmation")
 
@@ -311,7 +347,7 @@ class TestRemove(unittest.TestCase):
             iso = Path(tmpdir) / "archlinux-2026.iso"
             iso.write_bytes(b"\x00" * 1024)
             result = runner.invoke(
-                app, ["remove", "archlinux", "--drive", tmpdir], input="n\n"
+                app, ["--yes", "remove", "archlinux", "--drive", tmpdir], input="n\n"
             )
             self.assertEqual(result.exit_code, 0)
             self.assertTrue(iso.exists())
@@ -327,7 +363,7 @@ class TestRemove(unittest.TestCase):
         """Ambiguous partial queries list candidates instead of picking one."""
         mock_cfg.return_value = MOCK_CONFIG
         with tempfile.TemporaryDirectory() as tmpdir:
-            result = runner.invoke(app, ["remove", "u", "--drive", tmpdir])
+            result = runner.invoke(app, ["--yes", "remove", "u", "--drive", tmpdir])
             self.assertNotEqual(result.exit_code, 0)
             self.assertIn("Ambiguous distro", result.stdout)
             self.assertIn("Arch Linux", result.stdout)
@@ -363,7 +399,9 @@ class TestUpdate(unittest.TestCase):
     def test_update_unknown_distro_fails(self, mock_cfg: MagicMock) -> None:
         mock_cfg.return_value = MOCK_CONFIG
         with tempfile.TemporaryDirectory() as tmpdir:
-            result = runner.invoke(app, ["update", "bogus-distro", "--drive", tmpdir])
+            result = runner.invoke(
+                app, ["--yes", "update", "bogus-distro", "--drive", tmpdir]
+            )
             self.assertNotEqual(result.exit_code, 0)
             self.assertIn("Unknown distro", result.stdout)
 
@@ -411,6 +449,34 @@ class TestSearch(unittest.TestCase):
         result = runner.invoke(app, ["search", "--help"])
         self.assertNotIn("--dry-run", result.stdout)
 
+    @patch("visync.main.load_config", return_value=MOCK_CONFIG)
+    def test_search_works_with_no_drive_attached(self, *_: MagicMock) -> None:
+        """Browsing the catalogue must not require the drive to be plugged in."""
+        with patch("visync.main.find_ventoy_drives", return_value=[]):
+            result = runner.invoke(app, ["search"])
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("Arch Linux", result.stdout)
+        self.assertIn("no Ventoy drive detected", result.stdout)
+
+    @patch("visync.pm.get_installed_ids", return_value=[])
+    @patch("visync.main.load_config", return_value=MOCK_CONFIG)
+    def test_search_by_query_works_with_no_drive(self, *_: MagicMock) -> None:
+        with patch("visync.main.find_ventoy_drives", return_value=[]):
+            result = runner.invoke(app, ["search", "archlinux"])
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("Arch Linux", result.stdout)
+        self.assertIn("no Ventoy drive detected", result.stdout)
+
+    @patch("visync.pm.get_installed_ids", return_value=[])
+    @patch("visync.main.load_config", return_value=MOCK_CONFIG)
+    def test_explicit_drive_still_validated_for_search(self, *_: MagicMock) -> None:
+        """An explicit --drive that is not there is still a typo, not a hint."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = runner.invoke(
+                app, ["--yes", "search", "--drive", str(Path(tmpdir) / "nope")]
+            )
+        self.assertEqual(result.exit_code, 1)
+
 
 # ── info ─────────────────────────────────────────────────────────────────────
 
@@ -441,6 +507,15 @@ class TestInfo(unittest.TestCase):
         result = runner.invoke(app, ["info", "--help"])
         self.assertNotIn("--dry-run", result.stdout)
 
+    @patch("visync.main.load_config", return_value=MOCK_CONFIG)
+    def test_info_works_with_no_drive_attached(self, *_: MagicMock) -> None:
+        """`info` describes the catalogue entry, which needs no drive."""
+        with patch("visync.main.find_ventoy_drives", return_value=[]):
+            result = runner.invoke(app, ["info", "archlinux"])
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("Arch Linux", result.stdout)
+        self.assertIn("no Ventoy drive detected", result.stdout)
+
 
 # ── autodetect ───────────────────────────────────────────────────────────────
 
@@ -451,7 +526,7 @@ class TestAutodetect(unittest.TestCase):
     def test_autodetect_no_files(self, mock_cfg: MagicMock, *_: MagicMock) -> None:
         mock_cfg.return_value = MOCK_CONFIG
         with tempfile.TemporaryDirectory() as tmpdir:
-            result = runner.invoke(app, ["autodetect", "--drive", tmpdir])
+            result = runner.invoke(app, ["--yes", "autodetect", "--drive", tmpdir])
             self.assertEqual(result.exit_code, 0)
             self.assertIn("No new distros detected", result.stdout)
 
@@ -467,7 +542,7 @@ class TestAutodetect(unittest.TestCase):
                 "visync.main.identify_distro", side_effect=_mock_identify_distro
             ):
                 result = runner.invoke(
-                    app, ["autodetect", "--drive", tmpdir, "--dry-run"]
+                    app, ["--yes", "autodetect", "--drive", tmpdir, "--dry-run"]
                 )
                 self.assertEqual(result.exit_code, 0)
                 self.assertIn("Would detect", result.stdout)
@@ -482,7 +557,7 @@ class TestAutodetect(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             iso = Path(tmpdir) / "archlinux-2026.iso"
             iso.write_bytes(b"\x00" * 1024)
-            result = runner.invoke(app, ["autodetect", "--drive", tmpdir])
+            result = runner.invoke(app, ["--yes", "autodetect", "--drive", tmpdir])
             self.assertEqual(result.exit_code, 0)
             self.assertIn("Detected", result.stdout)
 
@@ -500,7 +575,7 @@ class TestAutodetect(unittest.TestCase):
             with patch(
                 "visync.main.identify_distro", side_effect=_mock_identify_distro
             ):
-                result = runner.invoke(app, ["autodetect", "--drive", tmpdir])
+                result = runner.invoke(app, ["--yes", "autodetect", "--drive", tmpdir])
                 self.assertEqual(result.exit_code, 0)
                 self.assertIn("No new distros detected", result.stdout)
 
@@ -516,7 +591,7 @@ class TestAutodetect(unittest.TestCase):
 class TestList(unittest.TestCase):
     def test_list_empty_drive(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            result = runner.invoke(app, ["list", "--drive", tmpdir])
+            result = runner.invoke(app, ["--yes", "list", "--drive", tmpdir])
             self.assertEqual(result.exit_code, 0)
             self.assertIn("No ISO files found", result.stdout)
 
@@ -525,7 +600,7 @@ class TestList(unittest.TestCase):
             iso = Path(tmpdir) / "archlinux-2026.iso"
             iso.write_bytes(b"\x00" * (1024 * 1024))
             with patch("visync.main.load_all_metadata", return_value={}):
-                result = runner.invoke(app, ["list", "--drive", tmpdir])
+                result = runner.invoke(app, ["--yes", "list", "--drive", tmpdir])
                 self.assertEqual(result.exit_code, 0)
                 self.assertIn("archlinux-2026.iso", result.stdout)
 
@@ -581,7 +656,7 @@ class TestNukeMetadata(unittest.TestCase):
     def test_nuke_metadata_no_dir(self) -> None:
         """nuke-metadata on drive with no .visync/metadata shows message."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            result = runner.invoke(app, ["nuke-metadata", "--drive", tmpdir])
+            result = runner.invoke(app, ["--yes", "nuke-metadata", "--drive", tmpdir])
             self.assertEqual(result.exit_code, 0)
             self.assertIn("No metadata directory found", result.stdout)
 
@@ -590,7 +665,7 @@ class TestNukeMetadata(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             meta_dir = Path(tmpdir) / ".visync" / "metadata"
             meta_dir.mkdir(parents=True)
-            result = runner.invoke(app, ["nuke-metadata", "--drive", tmpdir])
+            result = runner.invoke(app, ["--yes", "nuke-metadata", "--drive", tmpdir])
             self.assertEqual(result.exit_code, 0)
             self.assertIn("Metadata directory is empty", result.stdout)
 
@@ -602,7 +677,7 @@ class TestNukeMetadata(unittest.TestCase):
             (meta_dir / "arch.iso.json").write_text("{}")
             (meta_dir / "ubuntu.iso.json").write_text("{}")
             result = runner.invoke(
-                app, ["nuke-metadata", "--drive", tmpdir, "--dry-run"]
+                app, ["--yes", "nuke-metadata", "--drive", tmpdir, "--dry-run"]
             )
             self.assertEqual(result.exit_code, 0)
             self.assertIn("Would delete", result.stdout)
@@ -616,10 +691,52 @@ class TestNukeMetadata(unittest.TestCase):
             meta_dir.mkdir(parents=True)
             (meta_dir / "arch.iso.json").write_text("{}")
             (meta_dir / "ubuntu.iso.json").write_text("{}")
-            result = runner.invoke(app, ["nuke-metadata", "--drive", tmpdir, "--yes"])
+            result = runner.invoke(
+                app, ["--yes", "nuke-metadata", "--drive", tmpdir, "--yes"]
+            )
             self.assertEqual(result.exit_code, 0)
             self.assertIn("Deleted 2 metadata", result.stdout)
             self.assertFalse(meta_dir.exists())
+
+
+class TestGlobalYesFlag(unittest.TestCase):
+    """--yes is a single global answer, not a per-command option."""
+
+    def setUp(self) -> None:
+        self._saved = visync_main._ASSUME_YES
+        self.addCleanup(setattr, visync_main, "_ASSUME_YES", self._saved)
+
+    def test_flag_is_global_not_per_command(self) -> None:
+        root = runner.invoke(app, ["--help"])
+        self.assertIn("--yes", root.stdout)
+        # Accepting it before the subcommand is the documented position.
+        for command in ("sync", "install", "remove", "nuke-metadata"):
+            with self.subTest(command=command):
+                result = runner.invoke(app, ["--yes", command, "--help"])
+                self.assertEqual(result.exit_code, 0, result.output)
+                self.assertNotIn("--yes", result.stdout.split("Usage")[0])
+
+    def test_flag_sets_the_flag(self) -> None:
+        visync_main._ASSUME_YES = False
+        result = runner.invoke(app, ["--yes", "version"])
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertTrue(visync_main._ASSUME_YES)
+
+    def test_omitting_it_leaves_the_flag_off(self) -> None:
+        visync_main._ASSUME_YES = True
+        with patch("visync.main.version"):
+            result = runner.invoke(app, ["version"])
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertFalse(visync_main._ASSUME_YES)
+
+    def test_non_interactive_sync_on_plain_dir_still_asks(self) -> None:
+        """Without --yes a script must not silently adopt an unrelated directory."""
+        visync_main._ASSUME_YES = False
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = runner.invoke(app, ["list", "--drive", tmpdir], input="n\n")
+            self.assertEqual(result.exit_code, 1)
+            self.assertIn("Ventoy/Visync-managed drive", result.stdout)
+            self.assertIn("Aborted", result.stdout)
 
     def test_nuke_metadata_requires_confirmation(self) -> None:
         """Without --yes, aborting the prompt leaves everything intact."""
@@ -627,7 +744,7 @@ class TestNukeMetadata(unittest.TestCase):
             meta_dir = Path(tmpdir) / ".visync" / "metadata"
             meta_dir.mkdir(parents=True)
             (meta_dir / "arch.iso.json").write_text("{}")
-            result = runner.invoke(app, ["nuke-metadata", "--drive", tmpdir])
+            result = runner.invoke(app, ["--yes", "nuke-metadata", "--drive", tmpdir])
             self.assertNotEqual(result.exit_code, 0)
             self.assertTrue((meta_dir / "arch.iso.json").exists())
 
@@ -639,7 +756,9 @@ class TestNukeMetadata(unittest.TestCase):
             planted = meta_dir / "treasure.iso"
             planted.write_bytes(b"MZ not-really-an-iso")
             (meta_dir / "arch.iso.json").write_text("{}")
-            result = runner.invoke(app, ["nuke-metadata", "--drive", tmpdir, "--yes"])
+            result = runner.invoke(
+                app, ["--yes", "nuke-metadata", "--drive", tmpdir, "--yes"]
+            )
             self.assertEqual(result.exit_code, 0)
             self.assertTrue(planted.exists(), "non-json file must survive")
             self.assertIn("left in place", result.stdout)
@@ -786,6 +905,7 @@ class TestGetDrives(unittest.TestCase):
     def test_explicit_drive_flag_bypasses_detection(self) -> None:
         """When --drive is provided, detection is skipped entirely."""
         with tempfile.TemporaryDirectory() as tmpdir:
+            (Path(tmpdir) / "ventoy").mkdir()
             result = _get_drives(drives=[Path(tmpdir)])
             self.assertEqual(result, [Path(tmpdir)])
 
@@ -849,6 +969,55 @@ class TestGetDrives(unittest.TestCase):
             self.assertRaises(typer.Exit),
         ):
             _get_drives()
+
+
+class TestNonVentoyDriveConfirmation(unittest.TestCase):
+    """--drive pointing somewhere that is not a Ventoy drive is a footgun.
+
+    Cleanup unlinks ISOs it recognises in the target directory, so a typo in
+    --drive can delete real images from an unrelated folder. These tests pin
+    the confirmation, and --yes as the escape hatch for scripts.
+    """
+
+    def setUp(self) -> None:
+        self._saved = visync_main._ASSUME_YES
+        self.addCleanup(setattr, visync_main, "_ASSUME_YES", self._saved)
+        visync_main._ASSUME_YES = False
+
+    def test_plain_directory_asks_first(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch("visync.main.typer.confirm", return_value=True) as confirm,
+            ):
+                result = _get_drives(drives=[Path(tmpdir)])
+            self.assertEqual(result, [Path(tmpdir)])
+            confirm.assert_called_once()
+
+    def test_declining_aborts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch("visync.main.typer.confirm", return_value=False),
+                self.assertRaises(typer.Exit),
+            ):
+                _get_drives(drives=[Path(tmpdir)])
+
+    def test_assume_yes_skips_prompt(self) -> None:
+        visync_main._ASSUME_YES = True
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("visync.main.typer.confirm") as confirm:
+                result = _get_drives(drives=[Path(tmpdir)])
+            self.assertEqual(result, [Path(tmpdir)])
+            confirm.assert_not_called()
+
+    def test_ventoy_marker_needs_no_prompt(self) -> None:
+        """A directory that really is a Ventoy drive is used without asking."""
+        for marker in ("ventoy", ".visync"):
+            with tempfile.TemporaryDirectory() as tmpdir, self.subTest(marker=marker):
+                (Path(tmpdir) / marker).mkdir()
+                with patch("visync.main.typer.confirm") as confirm:
+                    result = _get_drives(drives=[Path(tmpdir)])
+                self.assertEqual(result, [Path(tmpdir)])
+                confirm.assert_not_called()
 
 
 if __name__ == "__main__":

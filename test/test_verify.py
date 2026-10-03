@@ -10,7 +10,17 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from visync.verify import *
+from visync.verify import (
+    ChecksumUnavailable,
+    compute_iso_hash,
+    expand_url,
+    parse_gpg_checksum,
+    parse_hashsums,
+    parse_tails_json,
+    verify_all_isos,
+    verify_from_config,
+    verify_iso,
+)
 
 
 def _section(title: str) -> None:

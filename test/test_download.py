@@ -909,6 +909,12 @@ class TestChunkedDownload(unittest.TestCase):
                 self.send_response(206 if range_header else 200)
                 self.send_header("Content-Length", str(len(chunk)))
                 self.send_header("Accept-Ranges", "bytes")
+                if range_header:
+                    # A conforming range server states which slice it served;
+                    # the client validates this before writing.
+                    self.send_header(
+                        "Content-Range", f"bytes {start}-{end - 1}/{total}"
+                    )
                 self.end_headers()
                 self.wfile.write(chunk)
 

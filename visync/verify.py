@@ -145,6 +145,7 @@ _UA = {"User-Agent": "Mozilla/5.0"}
 def _fetch(url: str) -> str:
     require_https(url, "checksum source")
     req = urllib.request.Request(url, headers=_UA)
+    # require_https immediately above is the explicit allowlist S310 asks for.
     with urlopen(req, timeout=30) as resp:
         return resp.read().decode("utf-8", errors="replace")
 
@@ -164,9 +165,18 @@ def _import_key_then_verify(
     key_file = Path(tempfile.mkdtemp(prefix="visync-gpg")) / "signing.key"
     try:
         try:
+            # The key itself must be fetched over HTTPS. _fetch enforces this
+            # for checksum content, but the signing key was going out in
+            # cleartext, which defeats the fingerprint pinning it exists to
+            # support.
+            require_https(key_url, "signing key")
             req = urllib.request.Request(key_url, headers=_UA)
             with urlopen(req, timeout=30) as resp:
                 key_file.write_bytes(resp.read())
+        except ValueError as e:
+            # A config-supplied http:// signing key is a misconfiguration, not
+            # an outage, so surface it as a refusal rather than "unreachable".
+            raise ChecksumUnavailable(str(e)) from e
         except Exception as e:
             raise ChecksumUnavailable(
                 f"signing key unreachable ({key_url}): {e}"

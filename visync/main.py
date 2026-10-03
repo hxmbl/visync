@@ -3,6 +3,7 @@
 Built with typer. Run `visync --help` for available commands.
 """
 
+import functools
 from pathlib import Path
 
 import typer
@@ -30,6 +31,26 @@ from visync.verify import extract_version_from_filename, run_directory_verify
 
 app = typer.Typer()
 
+# Set by the global --yes flag. Module-level rather than threaded through every
+# command because it is a single answer to a single question ("do not ask me
+# about anything unusual"), and the alternative — eight copies of the same
+# option — would let a script skip the check on one command and not another.
+_ASSUME_YES = False
+
+
+@app.callback()
+def main_callback(
+    assume_yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Answer yes to confirmations, including using a --drive that "
+        "does not look like a Ventoy drive",
+    ),
+) -> None:
+    global _ASSUME_YES
+    _ASSUME_YES = assume_yes
+
 
 def _parse_drives(raw: str | None) -> list[Path] | None:
     """Parse comma-separated drive paths from CLI option."""
@@ -44,6 +65,11 @@ def _get_drives(drives: list[Path] | None = None) -> list[Path]:
     If *drives* is provided, validate and return them.
     If exactly one drive is detected, return it.
     If multiple drives are detected, prompt the user to select one or more.
+
+    An explicit path that does not look like a Ventoy drive requires
+    confirmation. Writes into the wrong directory are not recoverable: cleanup
+    unlinks ISOs it recognises there, so a typo in --drive can delete real
+    images. The global --yes flag skips the prompt.
     """
     if drives is not None:
         validated = []
@@ -51,10 +77,30 @@ def _get_drives(drives: list[Path] | None = None) -> list[Path]:
             if not d.is_dir():
                 error(f"Not a directory: {d}")
                 raise typer.Exit(1)
-            if not (d / ".visync").is_dir():
-                marker = d / "ventoy"
-                if not marker.is_dir():
-                    warn(f"{d} does not look like a Ventoy/Visync-managed drive")
+            if not (d / ".visync").is_dir() and not (d / "ventoy").is_dir():
+                console.print(
+                    "  [yellow]⚠[/yellow] Commands can write ISOs here, and"
+                    " cleanup can [bold]delete[/bold] ISOs it recognises."
+                )
+                if _ASSUME_YES:
+                    warn(
+                        f"{d} is not a Ventoy/Visync-managed drive "
+                        "(no .visync/ and no ventoy/ directory) — proceeding "
+                        "because --yes was given."
+                    )
+                else:
+                    error(
+                        f"{d} is not a Ventoy/Visync-managed drive "
+                        "(no .visync/ and no ventoy/ directory)."
+                    )
+                    try:
+                        proceed = typer.confirm("Use this directory anyway?")
+                    except typer.Abort as exc:
+                        error("Aborted.")
+                        raise typer.Exit(1) from exc
+                    if not proceed:
+                        error("Aborted — nothing changed.")
+                        raise typer.Exit(1)
             validated.append(d)
         return validated
 
@@ -77,8 +123,8 @@ def _get_drives(drives: list[Path] | None = None) -> list[Path]:
     while True:
         try:
             raw = typer.prompt("Select drive(s)")
-        except (typer.Abort, EOFError):
-            raise typer.Exit(1)
+        except (typer.Abort, EOFError) as exc:
+            raise typer.Exit(1) from exc
         try:
             indices = [int(x.strip()) for x in raw.split(",") if x.strip()]
             if not indices:
@@ -94,6 +140,49 @@ def _get_drives(drives: list[Path] | None = None) -> list[Path]:
             error(
                 f"Invalid input: {e}. Enter numbers 1-{len(detected)} separated by commas."
             )
+
+
+def _drives_optional(drive: str | None) -> list[Path]:
+    """Resolve drives for read-only catalogue commands.
+
+    Unlike _get_drives this returns an empty list instead of failing when no
+    Ventoy drive is present. `search` and `info` answer questions about the
+    configured catalogue, which is exactly what someone wants to ask before
+    plugging the drive in; hard-failing meant the only way to browse the
+    catalogue was to have the drive mounted. An explicit --drive is still
+    validated normally, since naming a path that is not there is a typo.
+    """
+    explicit = _parse_drives(drive)
+    if explicit is not None:
+        return _get_drives(explicit)
+    return find_ventoy_drives()
+
+
+def _interruptible(fn):
+    """Turn Ctrl-C into a clean exit(130) instead of a traceback.
+
+    *fn* is the body of a command. Downloads already delete their own in-flight
+    .part file when interrupted (see download._discard_partial), so this only
+    has to stop the spinner, say what happened, and use the conventional exit
+    status for SIGINT. Previously the KeyboardInterrupt reached the interpreter
+    top level, which produced a traceback and — because the handler that was
+    supposed to tidy up lived in download.py's __main__ block, a path the CLI
+    never executes — left partial downloads behind on the drive.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except KeyboardInterrupt:
+            console.print()
+            console.print(
+                "[red]✕ Interrupted.[/red] Partial downloads were removed; "
+                "nothing was changed on the drive."
+            )
+            raise typer.Exit(130) from None
+
+    return wrapper
 
 
 def _sync_one_drive(
@@ -134,6 +223,7 @@ def _sync_one_drive(
 
 
 @app.command()
+@_interruptible
 def install(
     name: str | None = typer.Argument(
         default=None, help="Distro name or keyword to install"
@@ -385,9 +475,9 @@ def remove(
                 console.print(f"    [red]×[/red] {_esc(iso_path.name)}")
             try:
                 confirmed = typer.confirm("Delete these file(s)?")
-            except typer.Abort:
+            except typer.Abort as exc:
                 error("Aborted — nothing deleted.")
-                raise typer.Exit(1)
+                raise typer.Exit(1) from exc
             if not confirmed:
                 output_info("Aborted — nothing deleted.")
                 continue
@@ -408,6 +498,7 @@ def remove(
 
 
 @app.command()
+@_interruptible
 def update(
     name: str | None = typer.Argument(
         default=None, help="Distro to update (all if omitted)"
@@ -539,7 +630,7 @@ def search(
         warn("No distros configured.")
         return
 
-    target_drives = _get_drives(_parse_drives(drive))
+    target_drives = _drives_optional(drive)
 
     # Collect installed status across all drives
     installed_by_drive: dict[Path, set[str]] = {}
@@ -557,6 +648,10 @@ def search(
             console.print(f"    strategy: {s.get('strategy', '?')}")
             if s.get("base_url"):
                 console.print(f"    url: {_esc(str(s['base_url']))}")
+            if not target_drives:
+                console.print(
+                    "    [dim]no Ventoy drive detected — install status unknown[/dim]"
+                )
             for vr in target_drives:
                 status = (
                     "installed" if entry_id in installed_by_drive[vr] else "available"
@@ -603,14 +698,22 @@ def search(
             console.print(f"    {'':3} {_esc(name):<25} {_esc(strategy):<20} {markers}")
     else:
         for drive_status, name, strategy in rows:
-            marker = (
-                f"[green]{drive_status[0]}[/green]"
-                if drive_status[0] == "+"
-                else f"[dim]{drive_status[0]}[/dim]"
-            )
-            console.print(f"    {marker} {_esc(name)} [dim]({_esc(strategy)})[/dim]")
+            if drive_status:
+                marker = (
+                    f"[green]{drive_status[0]}[/green]"
+                    if drive_status[0] == "+"
+                    else f"[dim]{drive_status[0]}[/dim]"
+                )
+                console.print(
+                    f"    {marker} {_esc(name)} [dim]({_esc(strategy)})[/dim]"
+                )
+            else:
+                console.print(f"      {_esc(name)} [dim]({_esc(strategy)})[/dim]")
     console.print()
-    console.print("  [dim]+ = installed[/dim]")
+    if target_drives:
+        console.print("  [dim]+ = installed[/dim]")
+    else:
+        console.print("  [dim]no Ventoy drive detected — showing catalogue only[/dim]")
 
 
 @app.command()
@@ -635,7 +738,7 @@ def info(
         raise typer.Exit(1)
 
     s = distros[entry_id]
-    target_drives = _get_drives(_parse_drives(drive))
+    target_drives = _drives_optional(drive)
 
     console.print()
     console.print(f"  [bold]{_esc(str(s.get('clean_name', entry_id)))}[/bold]")
@@ -648,6 +751,8 @@ def info(
     console.print(f"    checksums: {s.get('checksum_format', 'none')}")
 
     clean_name = s.get("clean_name", entry_id)
+    if not target_drives:
+        console.print("    [dim]no Ventoy drive detected — nothing to report on[/dim]")
     for vr in target_drives:
         installed = set(get_installed_ids(vr))
         status = (
@@ -802,6 +907,7 @@ def list_isos(
 
 
 @app.command()
+@_interruptible
 def sync(
     config: Path | None = typer.Option(
         None, "--config", "-c", help="Path to config file"
@@ -1003,9 +1109,9 @@ def nuke_metadata(
                 console.print(f"    [red]×[/red] {_esc(f.name)}")
             try:
                 confirmed = typer.confirm("Delete these file(s)?")
-            except typer.Abort:
+            except typer.Abort as exc:
                 error("Aborted — nothing deleted.")
-                raise typer.Exit(1)
+                raise typer.Exit(1) from exc
             if not confirmed:
                 output_info("Aborted — nothing deleted.")
                 continue

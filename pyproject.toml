@@ -76,13 +76,35 @@ line-length = 88
 target-version = "py311"
 
 [tool.ruff.lint]
+# S (bandit) and B (bugbear) are the security-relevant families and are enabled
+# here. They previously sat in `ignore` without ever being selected, so the
+# rules were dead config and nothing was actually being checked.
+select = ["F", "I", "UP", "B", "S"]
+#
+# These ignores are project-wide policies, each true of every remaining site.
+# Anything that needs a per-site argument (a swallowed exception with a specific
+# reason, say) carries a per-line `# noqa` instead, so a global ignore here
+# always means "the same thing everywhere", never "we stopped looking".
 ignore = [
-    "B008",  # typer.Option(...) default arguments are the CLI idiom
-    "BLE001",  # deliberate network/disk-tolerant exception handling
-    "S110",  # intentional except-pass while probing connectivity/disk edge cases
-    "S112",  # intentional ignore + manual returncode handling
-    "PLW1510",  # subprocess without check=True; returncode checked explicitly
+    "B008",  # typer.Option(...) in argument defaults is the CLI idiom
+    "S101",  # assert is used in tests only
+    "S108",  # hardcoded /tmp paths in tests are never read or written
+    "S324",  # sha1 is a supported checksum_algo, exercised deliberately
+    # Every subprocess call passes a literal argv list with no shell=True and no
+    # interpolated user input, so S603 cannot fire on a real injection here.
+    "S603",
+    # "gpg", "mount", "udisksctl" and "blkid" are resolved through PATH on
+    # purpose, so a distro-packaged binary works without hardcoding a prefix.
+    "S607",
+    # Every urlopen call site is preceded by require_https(), which is the
+    # explicit scheme allowlist S310 asks for. Pinned by TestLoopbackExemption.
+    "S310",
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# Test fixtures probe hardware and swallow failures by design; there is no
+# logging channel for a fixture to report through.
+"test/*" = ["S110", "S112", "S301"]
 
 [tool.pyright]
 include = ["visync"]
@@ -91,4 +113,7 @@ pythonVersion = "3.11"
 
 [tool.pytest.ini_options]
 testpaths = ["test"]
-addopts = "--cov=src --cov-report=term-missing:skip-covered --cov-report=xml --cov-fail-under=70"
+# --cov=src was left behind by the src/ -> visync/ rename. It matched no
+# module, so coverage measured 0% while every test passed and CI failed
+# on a green run.
+addopts = "--cov=visync --cov-report=term-missing:skip-covered --cov-report=xml --cov-fail-under=70"
