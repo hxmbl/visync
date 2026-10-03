@@ -5,11 +5,10 @@ State file: .visync/installed.json
 """
 
 import json
-import os
 from datetime import UTC, datetime
 from pathlib import Path
 
-from src.output import warn
+from visync.output import warn
 
 
 def _state_path(drive_root: Path) -> Path:
@@ -27,7 +26,7 @@ def load_installed(drive_root: Path) -> dict:
     if not path.exists():
         return {}
     try:
-        with open(path) as f:
+        with path.open() as f:
             data = json.load(f)
     except (json.JSONDecodeError, OSError):
         return {}
@@ -42,9 +41,9 @@ def save_installed(drive_root: Path, installed: dict) -> None:
     path = _state_path(drive_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(".json.tmp")
-    with open(tmp_path, "w") as f:
+    with tmp_path.open("w") as f:
         json.dump(installed, f, indent=2)
-    os.replace(tmp_path, path)
+    tmp_path.replace(path)
 
 
 def mark_installed(drive_root: Path, entry_id: str, version: str = "") -> None:
@@ -69,31 +68,43 @@ def get_installed_ids(drive_root: Path) -> list[str]:
     return list(load_installed(drive_root).keys())
 
 
+def _norm_query(text: str) -> str:
+    """Lowercase and collapse every run of non-alphanumerics to one space.
+
+    Lets ``ubuntu-desktop``, ``ubuntu_desktop``, ``Ubuntu Desktop`` and
+    ``UbuntuDesktop`` all reach the same entry. Reuses finder's normaliser so
+    query matching and filename matching cannot drift apart.
+    """
+    from visync.finder import _norm_tokens
+
+    return _norm_tokens(text)
+
+
 def matching_distros(query: str, config: dict) -> tuple[str | None, list[str]]:
     """Match a user query to distro entry_ids.
 
     Returns (exact_entry_id, partial_candidates). *exact_entry_id* is set for
-    an unambiguous exact match on entry_id, clean_name, or keyword.
-    *partial_candidates* lists every entry_id whose entry_id or clean_name
-    contains the query as a substring (possibly empty).
+    an unambiguous exact match on entry_id, clean_name, or keyword, ignoring
+    case and separator style. *partial_candidates* lists every entry_id whose
+    entry_id or clean_name contains the query as a normalised substring.
     """
-    query_lower = query.lower().strip()
-    if not query_lower:
+    query_norm = _norm_query(query)
+    if not query_norm:
         return None, []
     distros = config.get("distros", {})
 
     for key in distros:
-        if key.lower() == query_lower:
+        if _norm_query(key) == query_norm:
             return key, []
 
     for entry_id, settings in distros.items():
-        if settings.get("clean_name", "").lower() == query_lower:
+        if _norm_query(settings.get("clean_name", "")) == query_norm:
             return entry_id, []
 
     keyword_hits = [
         entry_id
         for entry_id, settings in distros.items()
-        if settings.get("keyword", "").lower() == query_lower
+        if _norm_query(settings.get("keyword", "")) == query_norm
     ]
     if len(keyword_hits) == 1:
         return keyword_hits[0], []
@@ -101,8 +112,8 @@ def matching_distros(query: str, config: dict) -> tuple[str | None, list[str]]:
     partials = [
         entry_id
         for entry_id, settings in distros.items()
-        if query_lower in settings.get("clean_name", "").lower()
-        or query_lower in entry_id.lower()
+        if query_norm in _norm_query(settings.get("clean_name", ""))
+        or query_norm in _norm_query(entry_id)
     ]
     return None, partials
 

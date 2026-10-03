@@ -6,6 +6,7 @@ from the file header, maps IDs to friendly distro names, and discovers
 .iso files under a directory.
 """
 
+import contextlib
 import json
 import os
 import re
@@ -15,7 +16,7 @@ from pathlib import Path
 
 from rich.markup import escape as _escape
 
-from src.output import console
+from visync.output import console
 
 _CONFIG_CACHE: dict | None = None
 
@@ -26,6 +27,36 @@ def reset_config_cache() -> None:
     _CONFIG_CACHE = None
 
 
+def _packaged_config() -> Path:
+    """Path of the config shipped with the installed package.
+
+    Wheels install config.toml as visync/config.toml, beside the modules.
+    importlib.resources resolves it so a zip-imported package still works; the
+    filesystem path is returned because every caller treats the config as a real
+    file (open, rewrite, --config round-trips).
+
+    An editable install and a bare source checkout instead have config.toml at
+    the repository root, so that layout is returned as the fallback rather than
+    letting discovery fall through to the current working directory — otherwise
+    running from an unrelated directory would silently find no config.
+    """
+    beside_package = Path(__file__).parent / "config.toml"
+    if beside_package.is_file():
+        return beside_package
+
+    try:
+        from importlib.resources import files
+
+        resource = Path(str(files("visync").joinpath("config.toml")))
+        if resource.is_file():
+            return resource
+    except (ImportError, ModuleNotFoundError, FileNotFoundError, TypeError):
+        pass
+
+    # Editable install / source checkout: one level above the package.
+    return Path(__file__).parent.parent / "config.toml"
+
+
 def _config_candidates() -> list[Path]:
     """Config search order: env override, user config, packaged config, cwd last."""
     candidates = []
@@ -33,7 +64,7 @@ def _config_candidates() -> list[Path]:
     if env_path:
         candidates.append(Path(env_path))
     candidates.append(Path.home() / ".config" / "visync" / "config.toml")
-    candidates.append(Path(__file__).parent.parent / "config.toml")
+    candidates.append(_packaged_config())
     candidates.append(Path.cwd() / "config.toml")
     return candidates
 
@@ -54,17 +85,31 @@ def load_config(config_path: Path | None = None) -> dict:
                 config_path = candidate
                 break
         else:
-            config_path = Path.cwd() / "config.toml"
+            # No candidate existed. Report where we looked rather than falling
+            # through to a bare cwd path, which used to surface as the
+            # misleading "Failed to parse config.toml: ... No such file".
+            searched = ", ".join(str(c) for c in _config_candidates())
             if os.environ.get("VISYNC_CONFIG"):
                 console.print(
                     "  [yellow]⚠[/yellow] VISYNC_CONFIG is set but the file does "
-                    "not exist — falling back to the default config."
+                    "not exist."
                 )
+            console.print(f"  [red]✗[/red] No config.toml found. Searched: {searched}")
+            console.print("  [dim]Set VISYNC_CONFIG or pass --config.[/dim]")
+            return {}
     try:
-        with open(config_path, "rb") as f:
+        with config_path.open("rb") as f:
             data = tomllib.load(f)
-    except Exception as e:
-        console.print(f"  [red]✗[/red] Failed to parse config.toml: {_escape(str(e))}")
+    except FileNotFoundError as e:
+        console.print(f"  [red]✗[/red] Config not found: {_escape(str(e))}")
+        return {}
+    except tomllib.TOMLDecodeError as e:
+        console.print(
+            f"  [red]✗[/red] Invalid TOML in {config_path}: {_escape(str(e))}"
+        )
+        return {}
+    except OSError as e:
+        console.print(f"  [red]✗[/red] Failed to read config.toml: {_escape(str(e))}")
         return {}
     _CONFIG_CACHE = data
     return data
@@ -84,7 +129,7 @@ def _mount_device(dev: str, detected: list[Path]) -> None:
         )
         if mount_dir.is_dir() and any(mount_dir.iterdir()):
             detected.append(mount_dir)
-    except Exception:
+    except Exception:  # noqa: S110 - mount without privileges fails; detection continues
         pass
     finally:
         if not detected or not mount_dir.is_dir() or not any(mount_dir.iterdir()):
@@ -121,7 +166,7 @@ def _udisksctl_mount(dev: str) -> Path | None:
                 return Path(findmnt.stdout.strip().splitlines()[0])
     except FileNotFoundError:
         pass  # udisksctl not installed
-    except Exception:
+    except Exception:  # noqa: S110 - unmountable device is simply not a Ventoy drive
         pass
     return None
 
@@ -208,7 +253,7 @@ def find_ventoy_drives() -> list[Path]:
                             detected_paths.append(mount_point)
                         else:
                             _mount_device(dev, detected_paths)
-                except Exception:
+                except Exception:  # noqa: S112 - try the next candidate device
                     continue
 
     elif system == "Darwin":
@@ -269,7 +314,7 @@ def find_ventoy_drives() -> list[Path]:
 def get_iso_volume_id(iso_path: Path) -> str:
     """Read the unchangeable internal Volume Identifier of an ISO file."""
     try:
-        with open(iso_path, "rb") as f:
+        with iso_path.open("rb") as f:
             # Skip directly to the ISO 9660 primary descriptor header
             f.seek(32808)
             volume_id = f.read(32)
@@ -295,6 +340,30 @@ def keyword_hit(keyword: str, text: str) -> bool:
     return re.search(rf"(?<!\w){re.escape(kw)}(?!\w)", _norm_tokens(text)) is not None
 
 
+def keyword_hit_loose(keyword: str, text: str) -> bool:
+    """Whole-token match of *keyword* with tokens allowed to be non-adjacent.
+
+    Needed where upstream inserts a version between the words: Ubuntu's volume
+    ID is ``Ubuntu 26.04.1 LTS amd64`` and its filename
+    ``ubuntu-26.04.1-desktop-amd64.iso``, so the keyword ``ubuntu-desktop``
+    never appears as consecutive tokens and the strict matcher cannot see it.
+    Every token of the keyword must still be present as a whole token, and in
+    order, so ``ubuntu-desktop`` does not match a Linux Mint desktop ISO.
+    """
+    tokens = _norm_tokens(keyword).split()
+    if not tokens:
+        return False
+    haystack = _norm_tokens(text).split()
+    position = 0
+    for token in tokens:
+        while position < len(haystack) and haystack[position] != token:
+            position += 1
+        if position == len(haystack):
+            return False
+        position += 1
+    return True
+
+
 def identify_distro(volume_id: str, file_name: str) -> str:
     """Match the OS distribution using a cascading hybrid approach.
 
@@ -308,10 +377,24 @@ def identify_distro(volume_id: str, file_name: str) -> str:
 
     config = load_config()
 
-    # Check standalone matches first — they're more specific than base distros
+    # Check standalone matches first — they're more specific than base distros.
+    # Tried most-specific first: the raw TOML order is what decided specificity
+    # before, so reordering two lines silently changed which name won.
     standalone_matches = config.get("standalone_matches", {})
-    for keyword, clean_name in standalone_matches.items():
+    for keyword, clean_name in sorted(
+        standalone_matches.items(), key=lambda kv: -len(_norm_tokens(kv[0]))
+    ):
         if keyword_hit(keyword, vol_lower) or keyword_hit(keyword, file_lower):
+            return clean_name
+    # Second pass for keywords upstream splits with a version in the middle
+    # ("ubuntu-desktop" vs "ubuntu-26.04.1-desktop-amd64.iso"). Still whole-token
+    # and still longest-first, so 'ubuntu-desktop' cannot be beaten by 'pop'.
+    for keyword, clean_name in sorted(
+        standalone_matches.items(), key=lambda kv: -len(_norm_tokens(kv[0]))
+    ):
+        if keyword_hit_loose(keyword, vol_lower) or keyword_hit_loose(
+            keyword, file_lower
+        ):
             return clean_name
 
     base_distros = config.get("base_distros", {})
@@ -330,10 +413,7 @@ def identify_distro(volume_id: str, file_name: str) -> str:
 
     name_match = re.match(r"^([a-zA-Z_\-]+?)(?:[-_]v?\d|\.)", file_name)
     if name_match:
-        extracted_name = (
-            name_match.group(1).replace("-", " ").replace("_", " ").title().strip()
-        )
-        return extracted_name
+        return name_match.group(1).replace("-", " ").replace("_", " ").title().strip()
 
     return "Unknown OS"
 
@@ -365,7 +445,7 @@ def read_iso_metadata(drive_root: Path, filename: str) -> dict | None:
     metadata_dir = drive_root / ".visync" / "metadata"
     meta_file = metadata_dir / f"{filename}.json"
     try:
-        with open(meta_file, "r") as f:
+        with meta_file.open() as f:
             data = json.load(f)
     except (json.JSONDecodeError, OSError):
         return None
@@ -397,9 +477,9 @@ def write_iso_metadata(
     }
     try:
         tmp_file = meta_file.with_suffix(".json.tmp")
-        with open(tmp_file, "w") as f:
+        with tmp_file.open("w") as f:
             json.dump(manifest, f, indent=2)
-        os.replace(tmp_file, meta_file)
+        tmp_file.replace(meta_file)
     except OSError as e:
         console.print(
             f"  [yellow]⚠[/yellow] Could not write metadata for {_escape(filename)}: {_escape(str(e))}"
@@ -410,10 +490,10 @@ def remove_iso_metadata(drive_root: Path, filename: str) -> None:
     """Delete the metadata file for a given ISO (called when an ISO is removed)."""
     metadata_dir = drive_root / ".visync" / "metadata"
     meta_file = metadata_dir / f"{filename}.json"
-    try:
+    # The caller treats a failed delete as "metadata stays behind"; the watchdog
+    # will retry. Only OSError is swallowed, as before.
+    with contextlib.suppress(OSError):
         meta_file.unlink(missing_ok=True)
-    except OSError:
-        pass
 
 
 def load_all_metadata(drive_root: Path) -> dict[str, dict]:
@@ -432,25 +512,15 @@ def load_all_metadata(drive_root: Path) -> dict[str, dict]:
     return result
 
 
-def find_installed_isos_formatted(directory: Path) -> list[str]:
-    """Find all ISOs and return their verified distribution names."""
-    detected_names = []
-
-    for iso_path in find_installed_isos(directory):
-        # Read the internal header label instead of trusting the filename
-        volume_id = get_iso_volume_id(iso_path)
-        distro = identify_distro(volume_id, iso_path.name)
-        detected_names.append(distro)
-
-    return detected_names
-
-
 # ── .visync watchdog ─────────────────────────────────────────────
 
 VISYNC_SIZE_LIMIT = 1_073_741_824  # 1 GiB
 _WATCHDOG_DIR_NAME = ".visync"
-_WATCHDOG_ALLOWED_EXTENSIONS = {".json"}  # Only these may be deleted by unlink
-_WATCHDOG_BLOCKED_EXTENSIONS = {".iso", ".img"}  # Hard-blocked from deletion
+# An allowlist, not a blocklist of ".iso"/".img": every deletion the watchdog can
+# perform is checked against this, so anything not listed here is refused. That
+# covers .iso and .img without naming them, and also covers a future file type
+# nobody thought to block.
+_WATCHDOG_ALLOWED_EXTENSIONS = {".json"}
 
 
 def _guard_json_only(path: Path) -> None:
@@ -505,16 +575,26 @@ def _dir_size(path: Path) -> int:
     return total
 
 
-def visync_watchdog(drive_root: Path) -> None:
-    """Enforce a 1 GiB ceiling on .visync/.
+def visync_watchdog(drive_root: Path, *, allow_wipe: bool = False) -> None:
+    """Keep .visync/ under its size ceiling.
 
-    If the directory exceeds the limit:
-    1. Deep clean — delete metadata files whose ISO no longer exists on the drive.
-    2. If still over budget — wipe the entire .visync/ directory.
+    Stage 1 — deep clean (always): delete metadata whose ISO no longer exists on
+    the drive. This only removes ``.json`` orphans and is self-healing, so it
+    runs unattended.
 
-    SAFETY: Before any rmtree call, the target path is validated to be
-    exactly '.visync' and not the drive root. A ValueError is raised
-    immediately if the path doesn't match.
+    Stage 2 — full wipe (opt-in, ``allow_wipe=True``): rmtree the directory.
+
+    Why stage 2 is opt-in: legitimate .visync/ state is installed.json plus one
+    ~236-byte manifest per ISO. Even a thousand ISOs is ~230 KiB against a
+    1 GiB ceiling, so being over budget is *never* legitimate and a wipe can
+    never repair a real problem — it can only destroy installed.json and every
+    registration. The realistic way to get here is a misconfigured
+    ``[iso] download_dir`` pointing under .visync/, which stages multi-GB ISOs
+    inside the directory. So by default we deep clean and then tell the user
+    exactly how to reclaim the space.
+
+    SAFETY: before any rmtree the target is validated to be exactly '.visync'
+    and not the drive root; a ValueError propagates immediately.
     """
     try:
         visync_dir = drive_root / _WATCHDOG_DIR_NAME
@@ -537,11 +617,25 @@ def visync_watchdog(drive_root: Path) -> None:
             )
             return
 
+        if not allow_wipe:
+            console.print(
+                f"  [yellow]⚠[/yellow] Watchdog: .visync/ is still {size_after / (1024**2):.1f} MiB after deep clean."
+            )
+            console.print(
+                "  [dim]Not wiping automatically — this destroys installed.json and every"
+                " registration.[/dim]"
+            )
+            console.print(
+                "  [dim]Re-run with --reset-visync to wipe .visync/, or point"
+                f" {_escape('[iso]')} download_dir outside .visync/.[/dim]"
+            )
+            return
+
         # GUARDRAIL: Validate target before any recursive deletion
         _guard_visync_path(visync_dir)
 
         console.print(
-            f"  [yellow]⚠[/yellow] Watchdog: .visync/ still {size_after / (1024**2):.1f} MiB after deep clean. Wiping entirely."
+            f"  [yellow]⚠[/yellow] Watchdog: wiping .visync/ ({size_after / (1024**2):.1f} MiB) as requested."
         )
         import shutil
 

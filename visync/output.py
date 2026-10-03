@@ -67,7 +67,10 @@ def error(msg: str) -> None:
 
 
 def removed(msg: str) -> None:
-    console.print(f"  [yellow]–[/yellow] {_esc(str(msg))}")
+    # A plain hyphen, not an en dash: the CLI's glyphs are ✓ ⚠ ✗ - , and the
+    # en dash (U+2013) is a homoglyph for a hyphen that appears nowhere else in
+    # the output.
+    console.print(f"  [yellow]-[/yellow] {_esc(str(msg))}")
 
 
 def iso_table(rows: list[tuple[str, str, str, str]], total_gb: float) -> None:
@@ -88,6 +91,28 @@ def iso_table(rows: list[tuple[str, str, str, str]], total_gb: float) -> None:
 
     console.print(table)
     console.print(f"\n  [dim]{len(rows)} ISO(s) — {total_gb:.1f} GiB total[/dim]")
+
+
+def failure_table(rows: list[tuple[str, str]]) -> None:
+    """Render (name, reason) pairs as an aligned, markup-escaped table.
+
+    A table (rather than hand-formatted lines) keeps long URLs and reasons from
+    wrapping back to column zero and destroying the indentation.
+    """
+    table = Table(
+        show_header=True,
+        header_style="bold",
+        pad_edge=False,
+        show_lines=False,
+        box=None,
+    )
+    table.add_column("Problem", style="red", no_wrap=True)
+    table.add_column("Reason", style="yellow")
+
+    for name, reason in rows:
+        table.add_row(_esc(str(name)), _esc(str(reason)))
+
+    console.print(table)
 
 
 def make_download_progress() -> Progress:

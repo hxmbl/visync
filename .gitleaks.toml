@@ -1,0 +1,36 @@
+# gitleaks configuration
+#
+# One allowlist entry, for one value, with the reason it is not a secret.
+title = "visync gitleaks allowlist"
+
+[allowlist]
+description = """
+An OpenPGP key fingerprint is a public identifier. A vendor publishes it
+precisely so that anyone can verify a signature against it, so seeing one in a
+repository is the expected case and not evidence of a leaked secret. gitleaks'
+generic-api-key rule matches the shape (a quoted 40-char uppercase hex string)
+rather than the meaning, and flags it.
+
+The value below is Parrot Security's signing-key fingerprint, B711822346552E4D92DA02DF7A8286AF0E81EE4A.
+It appears in two places:
+
+  config.toml                        the pin visync enforces at verification time
+  test/test_security_regressions.py  the test asserting that pin is enforced
+
+Both are public by design. If a real key ever needed to be shipped, it would be
+a private key block, which this entry does not cover.
+"""
+
+# AND, so a finding has to be both in an allowed file and match the allowed
+# value. The default OR would let any path through on the strength of one of the
+# two criteria alone.
+condition = "AND"
+
+paths = [
+  '''^config\.toml$''',
+  '''^test/test_security_regressions\.py$''',
+]
+
+regexes = [
+  '''B711822346552E4D92DA02DF7A8286AF0E81EE4A''',
+]

@@ -10,7 +10,16 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.verify import *
+from visync.verify import (
+    ChecksumUnavailable,
+    compute_iso_hash,
+    expand_url,
+    parse_gpg_checksum,
+    parse_hashsums,
+    parse_tails_json,
+    verify_from_config,
+    verify_iso,
+)
 
 
 def _section(title: str) -> None:
@@ -109,6 +118,27 @@ SHA256 (Fedora-Workstation-Live-x86_64-41-1.4.iso?key=val) = deadbeef
         self.assertEqual(result, "aa" * 32)
         _ok("Only SHA256/SHA512 lines are matched")
 
+    def test_selects_requested_algo_when_both_present(self) -> None:
+        """A file listing SHA256 and SHA512 for one ISO must honour *algo*."""
+        content = (
+            "SHA256 (file.iso) = " + "aa" * 32 + "\n"
+            "SHA512 (file.iso) = " + "bb" * 64 + "\n"
+        )
+        self.assertEqual(parse_gpg_checksum(content, "file.iso", "sha512"), "bb" * 64)
+        self.assertEqual(parse_gpg_checksum(content, "file.iso", "sha256"), "aa" * 32)
+        _ok("Algorithm label selects the right digest")
+
+    def test_rejects_digest_of_wrong_length(self) -> None:
+        """A mislabelled line (SHA256 label, 128-hex body) is not accepted."""
+        content = "SHA256 (file.iso) = " + "cc" * 64
+        self.assertIsNone(parse_gpg_checksum(content, "file.iso", "sha256"))
+        _ok("Length mismatch rejected rather than compared")
+
+    def test_unknown_algo_returns_none(self) -> None:
+        self.assertIsNone(
+            parse_gpg_checksum("SHA256 (f.iso) = " + "aa" * 32, "f.iso", "crc32")
+        )
+
 
 class TestParseHashsums(unittest.TestCase):
     def test_parses_ubuntu_style(self) -> None:
@@ -158,6 +188,96 @@ class TestParseHashsums(unittest.TestCase):
         )
         _ok("Exact filename match avoids substring false positives")
 
+    def test_multi_algorithm_sections_pick_requested_algo(self) -> None:
+        """Parrot-shaped signed-hashes.txt: md5/sha256/sha512 sections.
+
+        This is the regression for the data-loss bug: the md5 line comes first,
+        so a first-match parser returned a 32-hex digest that could never match
+        a sha256 comparison, and download_iso deleted the finished download.
+        """
+        content = (
+            "md5\n"
+            "a3ddddeb89af1768ff28d45dce5c6285  Parrot-security-7.4_amd64.iso\n"
+            "sha256\n"
+            "ca241282068701f481d96487dcd1af788bd897cd586ceb38ee16f61e387aa291"
+            "  Parrot-security-7.4_amd64.iso\n"
+            "sha512\n"
+            "cc85c85061aa5539afc865895c9a2354a709ca53e246264a71dc93eeb2eedaac1"
+            "7b9d548f25235655fefbc7c7e080398af061c041f8ba91d4ae43ddd163e931b"
+            "  Parrot-security-7.4_amd64.iso\n"
+        )
+        iso = "Parrot-security-7.4_amd64.iso"
+        self.assertEqual(
+            parse_hashsums(content, iso, "sha256"),
+            "ca241282068701f481d96487dcd1af788bd897cd586ceb38ee16f61e387aa291",
+        )
+        self.assertEqual(
+            parse_hashsums(content, iso, "sha512"),
+            "cc85c85061aa5539afc865895c9a2354a709ca53e246264a71dc93eeb2eedaac1"
+            "7b9d548f25235655fefbc7c7e080398af061c041f8ba91d4ae43ddd163e931b",
+        )
+        self.assertEqual(
+            parse_hashsums(content, iso, "md5"),
+            "a3ddddeb89af1768ff28d45dce5c6285",
+        )
+        _ok("Section headers select the requested algorithm, not the first line")
+
+    def test_multi_algorithm_default_algo_is_sha256(self) -> None:
+        """Defaulting to sha256 must not regress to 'first match' behaviour."""
+        content = (
+            "md5\n"
+            "a3ddddeb89af1768ff28d45dce5c6285  Parrot-security-7.4_amd64.iso\n"
+            "sha256\n"
+            "ca241282068701f481d96487dcd1af788bd897cd586ceb38ee16f61e387aa291"
+            "  Parrot-security-7.4_amd64.iso\n"
+        )
+        self.assertEqual(
+            parse_hashsums(content, "Parrot-security-7.4_amd64.iso"),
+            "ca241282068701f481d96487dcd1af788bd897cd586ceb38ee16f61e387aa291",
+        )
+
+    def test_absent_algo_section_returns_none(self) -> None:
+        """No sha512 section means unavailable, not a wrong-length digest."""
+        content = (
+            "md5\n"
+            "a3ddddeb89af1768ff28d45dce5c6285  Parrot-security-7.4_amd64.iso\n"
+            "sha256\n"
+            "ca241282068701f481d96487dcd1af788bd897cd586ceb38ee16f61e387aa291"
+            "  Parrot-security-7.4_amd64.iso\n"
+        )
+        self.assertIsNone(
+            parse_hashsums(content, "Parrot-security-7.4_amd64.iso", "sha512")
+        )
+        _ok("Missing algorithm yields None so the caller keeps the file")
+
+    def test_section_headers_absent_length_is_backstop(self) -> None:
+        """With no headers, digest length alone must disambiguate."""
+        content = (
+            "a3ddddeb89af1768ff28d45dce5c6285  Parrot-security-7.4_amd64.iso\n"
+            "ca241282068701f481d96487dcd1af788bd897cd586ceb38ee16f61e387aa291"
+            "  Parrot-security-7.4_amd64.iso\n"
+        )
+        self.assertEqual(
+            parse_hashsums(content, "Parrot-security-7.4_amd64.iso", "sha256"),
+            "ca241282068701f481d96487dcd1af788bd897cd586ceb38ee16f61e387aa291",
+        )
+        _ok("Length check still protects header-less files")
+
+    def test_sha1sums_selects_sha1(self) -> None:
+        sha1 = "da39a3ee5e6b4b0d3255bfef95601890afd80709"  # 40 hex
+        sha256 = "ca241282068701f481d96487dcd1af788bd897cd586ceb38ee16f61e387aa291"
+        content = (
+            f"{sha1}  Parrot-security-7.4_amd64.iso\n"
+            f"{sha256}  Parrot-security-7.4_amd64.iso\n"
+        )
+        self.assertEqual(
+            parse_hashsums(content, "Parrot-security-7.4_amd64.iso", "sha1"), sha1
+        )
+        self.assertEqual(
+            parse_hashsums(content, "Parrot-security-7.4_amd64.iso", "sha256"), sha256
+        )
+        _ok("40-hex and 64-hex digests disambiguate by length")
+
 
 class TestParseTailsJson(unittest.TestCase):
     def test_parses_valid_json(self) -> None:
@@ -180,6 +300,11 @@ class TestParseTailsJson(unittest.TestCase):
     def test_invalid_json_returns_none(self) -> None:
         result = parse_tails_json("not json")
         self.assertIsNone(result)
+
+    def test_rejects_digest_of_wrong_length(self) -> None:
+        """A short digest must not be compared against a sha256 local hash."""
+        data = {"sha256": "abcd1234"}
+        self.assertIsNone(parse_tails_json(json.dumps(data)))
 
 
 class TestExpandUrl(unittest.TestCase):
@@ -221,7 +346,7 @@ class TestVerifyIso(unittest.TestCase):
         p.write_bytes(data)
         return p
 
-    @patch("src.verify.urlopen")
+    @patch("visync.verify.urlopen")
     def test_verify_matching_hash(self, mock_urlopen: MagicMock) -> None:
         _section("verify_iso: Matching Hash")
         data = b"debian-netinst bytes\n" * 1000
@@ -241,7 +366,7 @@ class TestVerifyIso(unittest.TestCase):
             self.assertTrue(result)
             _ok("ISO verified successfully against SHA256SUMS")
 
-    @patch("src.verify.urlopen")
+    @patch("visync.verify.urlopen")
     def test_verify_wrong_hash(self, mock_urlopen: MagicMock) -> None:
         _section("verify_iso: Wrong Hash")
         data = b"tampered content\n" * 500
@@ -261,7 +386,7 @@ class TestVerifyIso(unittest.TestCase):
             self.assertFalse(result)
             _ok("Wrong hash correctly rejected")
 
-    @patch("src.verify.urlopen")
+    @patch("visync.verify.urlopen")
     def test_network_failure_raises_unavailable(self, mock_urlopen: MagicMock) -> None:
         _section("verify_iso: Network Failure")
         mock_urlopen.side_effect = Exception("connection timeout")
@@ -271,7 +396,7 @@ class TestVerifyIso(unittest.TestCase):
                 verify_iso(iso, "https://example.com/SHA256SUMS")
             _ok("Network failure raises ChecksumUnavailable (file must be kept)")
 
-    @patch("src.verify.urlopen")
+    @patch("visync.verify.urlopen")
     def test_verify_json_format(self, mock_urlopen: MagicMock) -> None:
         _section("verify_iso: JSON Format (Tails)")
         data = b"tails iso bytes\n" * 200
@@ -291,7 +416,7 @@ class TestVerifyIso(unittest.TestCase):
             self.assertTrue(result)
             _ok("JSON checksum format verified end-to-end")
 
-    @patch("src.verify.urlopen")
+    @patch("visync.verify.urlopen")
     def test_unknown_format_raises_unavailable(self, mock_urlopen: MagicMock) -> None:
         _section("verify_iso: Unknown Format")
         mock_resp = MagicMock()
@@ -305,7 +430,7 @@ class TestVerifyIso(unittest.TestCase):
                 verify_iso(iso, "https://example.com/x", checksum_format="unknown")
             _ok("Unknown format raises ChecksumUnavailable (file must be kept)")
 
-    @patch("src.verify.urlopen")
+    @patch("visync.verify.urlopen")
     def test_missing_entry_raises_unavailable(self, mock_urlopen: MagicMock) -> None:
         """ISO absent from the sums file is 'unavailable', not a mismatch."""
         mock_resp = MagicMock()
@@ -324,7 +449,6 @@ class TestVerifyFromConfig(unittest.TestCase):
         _section("verify_from_config: No checksum config")
         result = verify_from_config(
             iso_path=Path("/tmp/test.iso"),
-            distro_name="Fedora",
             distro_config={},
             checksums_config={},
         )
@@ -334,31 +458,11 @@ class TestVerifyFromConfig(unittest.TestCase):
     def test_disabled_checksums_returns_none(self) -> None:
         result = verify_from_config(
             iso_path=Path("/tmp/test.iso"),
-            distro_name="Fedora",
             distro_config={"checksum_url": "https://example.com/CHECKSUM"},
             checksums_config={"enabled": False},
         )
         self.assertIsNone(result)
         _ok("Returns None when checksums disabled in config")
-
-
-class TestVerifyAllIsos(unittest.TestCase):
-    def test_iterates_over_distro_map(self) -> None:
-        _section("verify_all_isos: Iteration")
-        distro_map = {
-            "/tmp/isos/a.iso": (Path("/tmp/isos/a.iso"), "Arch Linux"),
-            "/tmp/isos/b.iso": (Path("/tmp/isos/b.iso"), "Ubuntu Server"),
-        }
-        configs = {
-            "Arch Linux": {"checksum_url": "https://example.com/sha256sums.txt"},
-            "Ubuntu Server": {},
-        }
-        results = verify_all_isos(distro_map, configs, {})
-        self.assertEqual(len(results), 2)
-        self.assertEqual(results[0][1], "Arch Linux")
-        self.assertEqual(results[1][1], "Ubuntu Server")
-        _info(f"Processed {len(results)} ISOs")
-        _ok("verify_all_isos iterated correctly")
 
 
 if __name__ == "__main__":

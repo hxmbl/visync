@@ -6,7 +6,28 @@ build-backend = "hatchling.build"
 name = "visync"
 version = "0.1.0"
 description = "Ventoy ISO Synchronization Tool"
+readme = "README.md"
 requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "hxmbl" }]
+keywords = ["ventoy", "iso", "linux", "usb", "package-manager", "checksum"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Archiving :: Backup",
+    "Topic :: System :: Filesystems",
+    "Topic :: Utilities",
+]
 dependencies = [
     "typer>=0.12",
     "rich>=13.0",
@@ -22,29 +43,150 @@ dev = [
 ]
 
 [project.scripts]
-visync = "src.main:app"
+visync = "visync.main:app"
+
+[project.urls]
+Homepage = "https://github.com/hxmbl/visync"
+Repository = "https://github.com/hxmbl/visync"
+Issues = "https://github.com/hxmbl/visync/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src"]
+packages = ["visync"]
+
+# config.toml lives at the repo root so `pip install -e .` and a source
+# checkout can read it, and is copied into the wheel as visync/config.toml so an
+# installed visync finds it beside its own modules. Both layouts resolve through
+# finder._config_candidates(); keep the two in sync.
+[tool.hatch.build.targets.wheel.force-include]
+"config.toml" = "visync/config.toml"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/visync",
+    "/test",
+    "/config.toml",
+    "/README.md",
+    "/LICENSE",
+    "/pyproject.toml",
+    "/uv.lock",
+]
 
 [tool.ruff]
 line-length = 88
 target-version = "py311"
 
 [tool.ruff.lint]
+# S (bandit) and B (bugbear) are the security-relevant families and are enabled
+# here. They previously sat in `ignore` without ever being selected, so the
+# rules were dead config and nothing was actually being checked.
+#
+# The rest are the families that cost nothing to keep clean and catch real
+# defects: C4/PERF/PIE/RET/SIM/PTH (expression and control-flow shape), PLW/RUF
+# (subprocess and general correctness), plus the correctness basics F/I/UP/ARG.
+# They are all at zero findings today, so they cost nothing and will catch the
+# next thing someone writes.
+select = [
+    "F",    # pyflakes: undefined and unused names
+    "I",    # import order
+    "UP",   # pyupgrade
+    "ARG",  # unused arguments
+    "B",    # bugbear
+    "S",    # bandit
+    "C4",   # comprehensions
+    "PERF", # per-node performance
+    "PIE",  # misc lints
+    "RET",  # return statements
+    "SIM",  # simplifications
+    "PTH",  # prefer pathlib over os.path
+    "PLW",  # pylint warnings
+    "RUF",  # ruff-specific
+    "TID",  # tidy imports
+    "ISC",  # implicit string concatenation
+    "ICN",  # import conventions
+    "PGH",  # blanket noqa / type-ignore
+    "RSE",  # raise statements
+    "T20",  # print()
+    "FBT",  # boolean trap
+]
+#
+# Every ignore below is a project-wide policy: true of all remaining sites. A
+# site that needs its own argument — a swallowed exception with a specific
+# reason, say — carries a per-line `# noqa` instead, so a global ignore always
+# means "the same thing everywhere", never "we stopped looking".
 ignore = [
-    "B008",  # typer.Option(...) default arguments are the CLI idiom
-    "BLE001",  # deliberate network/disk-tolerant exception handling
-    "S110",  # intentional except-pass while probing connectivity/disk edge cases
-    "S112",  # intentional ignore + manual returncode handling
-    "PLW1510",  # subprocess without check=True; returncode checked explicitly
+    # Typer builds a command's options from its signature, so the flag defaults
+    # have to be evaluated in the argument list. This is the framework's own
+    # documented idiom, not an accident.
+    "B008",
+    "FBT001",  # boolean-typed *declaration*; Typer requires it, and internal
+    "FBT002",  # helpers take keyword-only booleans with a default
+    # assert is used in tests only
+    "S101",
+    # hardcoded /tmp paths in tests are never read or written
+    "S108",
+    # sha1 is a supported checksum_algo and is exercised deliberately
+    "S324",
+    # Every subprocess call passes a literal argv list with no shell=True and no
+    # interpolated user input, so S603 cannot fire on a real injection here.
+    "S603",
+    # "gpg", "mount", "udisksctl" and "blkid" are resolved through PATH on
+    # purpose, so a distro-packaged binary works without hardcoding a prefix.
+    "S607",
+    # Every urlopen call site is preceded by require_https(), which is the
+    # explicit scheme allowlist S310 asks for. Pinned by TestLoopbackExemption.
+    "S310",
+    # subprocess without check=: 8 of the 10 sites compare .returncode by hand
+    # because they need the output either way. The other two (mount, powershell)
+    # deliberately probe by inspecting the filesystem or stdout, so check=True
+    # would turn an expected absence into an exception.
+    "PLW1510",
+    # Module-level state for process-wide CLI singletons: the config memo, the
+    # installed urllib opener, the spinner, and the parsed --yes. Threading a
+    # context object through every command to avoid four globals would be
+    # indirection with no correctness gain.
+    "PLW0603",
+    # _debug() writes to stderr with print() on purpose: debug output must not go
+    # through Rich, which would mangle it and colour it like real output.
+    "T201",
 ]
 
+# Families deliberately not selected, so nobody re-adds them without reading why:
+#
+#   EM101/EM102, TRY003  Both push exception messages out to a variable or a
+#       message constant. With ChecksumUnavailable as the only custom exception
+#       in the codebase, `raise ValueError(f"...{detail}...")` at the raise site
+#       is the readable form; hoisting 15 messages into locals would be noise.
+#       They also contradict each other, so only one could ever be on.
+#   PLR, C901            Cyclomatic and branch-count limits. install() and sync()
+#       are genuinely long because they are CLI commands with many flags, and
+#       the fix would be parameter objects, not shorter functions. Limiting them
+#       would either be set so high it never fires or so low it blocks real work.
+#   TRY300/301          Already applied where it helps (see verify.py's parsers).
+#       TRY301's "abstract the raise into an inner function" makes the Typer
+#       argument parsing in _get_drives harder to follow, not easier.
+#   D, ANN, N, DOC, COM  Docstring and annotation rules for a codebase this size
+#       would be pure volume; type information is already enforced by pyright.
+
+[tool.ruff.lint.per-file-ignores]
+# Test fixtures probe hardware and swallow failures by design; there is no
+# logging channel for a fixture to report through.
+"test/*" = ["S110", "S112", "S301", "ARG", "PLR2004"]
+# Every FBT003 in main.py is a typer.Option(False, ...) call, which is the
+# framework reading its own flag defaults. FBT003 stays enabled everywhere else,
+# so a positional boolean argument in real code is still flagged.
+"visync/main.py" = ["FBT003"]
+
 [tool.pyright]
-include = ["src"]
+include = ["visync"]
 typeCheckingMode = "basic"
 pythonVersion = "3.11"
 
 [tool.pytest.ini_options]
 testpaths = ["test"]
-addopts = "--cov=src --cov-report=term-missing:skip-covered --cov-report=xml --cov-fail-under=70"
+# So CI can load the drive-detection stub by name: `pytest -p ci_no_ventoy_drive`.
+# It is a plugin rather than a test file, so `test_*.py` collection ignores it.
+pythonpath = ["test"]
+# --cov=src was left behind by the src/ -> visync/ rename. It matched no
+# module, so coverage measured 0% while every test passed and CI failed
+# on a green run.
+addopts = "--cov=visync --cov-report=term-missing:skip-covered --cov-report=xml --cov-fail-under=70"

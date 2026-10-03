@@ -1,6 +1,5 @@
 #!/visync/config.toml
 [iso]
-source_dir = ""
 download_dir = ""
 # ^ We don't download straight to the ventoy drive as its faster to verify and acts as a buffer. --no-buffer flag can override this, but verify will still happen, just on the drive.
 
@@ -28,6 +27,9 @@ debian = "Debian"
 "ubuntu.mint" = "Linux Mint"
 "debian.kali" = "Kali Linux"
 "debian.parrot" = "Parrot Security"
+# Fedora's aarch64 images carry "Fedora" in the volume ID, so without this they
+# are indistinguishable from x86_64 and install/remove cannot target one.
+"fedora.aarch64" = "Fedora ARM"
 
 [standalone_matches]
 # Text matching targets for standalone distros, flavors, and tools
@@ -45,8 +47,13 @@ rescuezilla = "Rescuezilla"
 tails = "Tails"
 tiny11 = "Tiny11"
 
-# Specific desktop flavor/version overrides so regex doesn't grab them poorly
+# Specific desktop flavor/version overrides so regex doesn't grab them poorly.
+# These must mirror the [distros.*] clean_name exactly: install/remove match an
+# identified distro against clean_name, so a missing entry here makes a
+# configured distro impossible to remove (test_verify_consistency_enforces this).
 fedora-kde = "Fedora KDE"
+fedora-arm = "Fedora ARM"
+ubuntu-desktop = "Ubuntu Desktop"
 ubuntu-server = "Ubuntu Server"
 
 ###################################
@@ -90,6 +97,8 @@ keyword = "live-server"
 strategy = "ubuntu_nested"
 base_url = "https://releases.ubuntu.com/"
 version_regex = 'href="([0-9\.]+)/"'
+# Current Ubuntu LTS only — see UbuntuDesktop for the rationale.
+version_filter = '\d*[02468]\.04(\.\d+)*'
 iso_regex = 'href="(ubuntu-[0-9\.-]+live-server-amd64\.iso)"'
 checksum_url = "{base_url}{version}/SHA256SUMS"
 checksum_format = "sha256sums"
@@ -156,6 +165,11 @@ keyword = "desktop"
 strategy = "ubuntu_nested"
 base_url = "https://releases.ubuntu.com/"
 version_regex = 'href="([0-9\.]+)/"'
+# Track the current Ubuntu LTS rather than the newest release of any kind.
+# LTS is an even-numbered year with a .04 month; interim releases (26.10,
+# 25.10, ...) are excluded. Point releases like 26.04.1 also match, which is
+# what we want — those are the same LTS series.
+version_filter = '\d*[02468]\.04(\.\d+)*'
 iso_regex = 'href="(ubuntu-[0-9\.-]+desktop-amd64\.iso)"'
 checksum_url = "{base_url}{version}/SHA256SUMS"
 checksum_format = "sha256sums"
@@ -168,17 +182,42 @@ strategy = "ubuntu_nested"
 base_url = "https://deb.parrotsec.org/parrot/iso/"
 version_regex = 'href="([0-9\.]+(?:-[0-9]+)?)/"'
 iso_regex = 'href="(Parrot-security-[0-9\.]+_amd64\.iso)"'
+# signed-hashes.txt is one clearsigned file listing md5, sha256 and sha512
+# sections for every image. The parser selects the sha256 section by header
+# and digest length — taking the first match would compare an md5 against a
+# sha256 and delete a good download as "corrupt".
 checksum_url = "{base_url}{version}/signed-hashes.txt"
 checksum_format = "sha256sums"
 checksum_algo = "sha256"
+# Signing key published by Parrot and referenced from inside the signed
+# content itself. Fingerprint confirmed via gpg --verify (VALIDSIG) against
+# the untouched file, and matches the fingerprint in Parrot's own
+# hash-and-key-verification documentation.
+signing_key_url = "https://deb.parrot.sh/parrot/misc/archive.gpg"
+signing_key_fingerprint = [
+    "B711822346552E4D92DA02DF7A8286AF0E81EE4A",
+]
 
 [distros.NixOS]
 clean_name = "NixOS Minimal"
 keyword = "nixos-minimal"
 strategy = "nixos_channel"
-base_url = "https://channels.nixos.org/nixos-26.05"
+# base_url is a prefix: the current stable channel (e.g. 26.05) is appended,
+# giving https://channels.nixos.org/nixos-26.05, which redirects to the exact
+# releases.nixos.org directory. NixOS publishes no nixos-stable alias, so the
+# channel is resolved from the release bucket at scrape time — see
+# nixos_channel in src/download.py.
+base_url = "https://channels.nixos.org/nixos"
+# Optional pin. If set and still a real channel it wins; otherwise the newest
+# stable channel from the bucket is used. Omit to always track latest stable.
+# channel = "26.05"
 variant = "minimal"
-checksum_url = "{base_url}/{iso_name}.sha256"
+# ISOs and .sha256 sidecars live under releases.nixos.org, NOT the channel host
+# (channels.nixos.org serves no .sha256, which made `visync verify` fail with
+# "source unreachable" for every NixOS ISO).
+releases_base_url = "https://releases.nixos.org"
+# Sidecars sit at /nixos/<channel>/nixos-<full release>/<iso>.sha256
+checksum_url = "{release_base_url}/nixos/{version}/nixos-{release}/{iso_name}.sha256"
 checksum_format = "sha256sums"
 checksum_algo = "sha256"
 
@@ -186,21 +225,21 @@ checksum_algo = "sha256"
 clean_name = "NixOS Graphical"
 keyword = "nixos-graphical"
 strategy = "nixos_channel"
-base_url = "https://channels.nixos.org/nixos-26.05"
+base_url = "https://channels.nixos.org/nixos"
 variant = "graphical"
-checksum_url = "{base_url}/{iso_name}.sha256"
+releases_base_url = "https://releases.nixos.org"
+checksum_url = "{release_base_url}/nixos/{version}/nixos-{release}/{iso_name}.sha256"
 checksum_format = "sha256sums"
 checksum_algo = "sha256"
 
-[distros.Omarchy]
-clean_name = "Omarchy"
-keyword = "omarchy"
-strategy = "direct_match"
-base_url = "https://iso.omarchy.org/"
-iso_regex = '(omarchy-[0-9\.]+\.iso)'
-checksum_format = "sha256sums"
-checksum_algo = "sha256"
-checksum_url = "{base_url}{iso_name}.sha256"
+# NOTE: Omarchy was removed. https://iso.omarchy.org/ returns HTTP 404 for
+# every path tried, including /index.html and /latest/. The per-version ISOs
+# still exist (e.g. /omarchy-4.0.1.iso serves a 6 GB file) but there is no
+# index page for direct_match to scrape, and no JSON manifest or release feed
+# was found to replace it. Guessing a version would mean trusting an
+# unverifiable pointer, so the scraper would fail closed instead.
+# Re-add here if Omarchy publishes a browsable index or a machine-readable
+# release feed.
 
 [distros.PopOS]
 clean_name = "Pop!_OS"

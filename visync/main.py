@@ -3,24 +3,66 @@
 Built with typer. Run `visync --help` for available commands.
 """
 
+import contextlib
+import functools
 from pathlib import Path
 
 import typer
 from rich.markup import escape as _esc
 
-from src.finder import (
+from visync.finder import (
     find_installed_isos,
     find_ventoy_drives,
     get_iso_volume_id,
     identify_distro,
+    keyword_hit,
     load_all_metadata,
     load_config,
 )
-from src.output import console, error, header, iso_table, success, warn
-from src.output import info as output_info
-from src.verify import extract_version_from_filename, run_directory_verify
+from visync.output import (
+    console,
+    error,
+    failure_table,
+    header,
+    iso_table,
+    success,
+    warn,
+)
+from visync.output import info as output_info
+from visync.verify import extract_version_from_filename, run_directory_verify
 
 app = typer.Typer()
+
+# Set by the global --yes flag. Module-level rather than threaded through every
+# command because it is a single answer to a single question ("do not ask me
+# about anything unusual"), and the alternative — eight copies of the same
+# option — would let a script skip the check on one command and not another.
+_ASSUME_YES = False
+
+
+@app.callback()
+def main_callback(
+    assume_yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Answer yes to every confirmation, including using a --drive "
+        "that does not look like a Ventoy drive",
+    ),
+) -> None:
+    global _ASSUME_YES
+    _ASSUME_YES = assume_yes
+
+
+def _skip_confirmations(command_yes: bool = False) -> bool:
+    """True when the user has asked not to be asked.
+
+    Commands that prompt for deletion keep their own ``--yes`` so the natural
+    form (``visync remove --yes``) keeps working, and also honour the global
+    flag so ``visync --yes remove`` means the same thing. Both spellings answer
+    one question, so both are folded together here rather than at each site.
+    """
+    return command_yes or _ASSUME_YES
 
 
 def _parse_drives(raw: str | None) -> list[Path] | None:
@@ -36,6 +78,11 @@ def _get_drives(drives: list[Path] | None = None) -> list[Path]:
     If *drives* is provided, validate and return them.
     If exactly one drive is detected, return it.
     If multiple drives are detected, prompt the user to select one or more.
+
+    An explicit path that does not look like a Ventoy drive requires
+    confirmation. Writes into the wrong directory are not recoverable: cleanup
+    unlinks ISOs it recognises there, so a typo in --drive can delete real
+    images. The global --yes flag skips the prompt.
     """
     if drives is not None:
         validated = []
@@ -43,10 +90,30 @@ def _get_drives(drives: list[Path] | None = None) -> list[Path]:
             if not d.is_dir():
                 error(f"Not a directory: {d}")
                 raise typer.Exit(1)
-            if not (d / ".visync").is_dir():
-                marker = d / "ventoy"
-                if not marker.is_dir():
-                    warn(f"{d} does not look like a Ventoy/Visync-managed drive")
+            if not (d / ".visync").is_dir() and not (d / "ventoy").is_dir():
+                console.print(
+                    "  [yellow]⚠[/yellow] Commands can write ISOs here, and"
+                    " cleanup can [bold]delete[/bold] ISOs it recognises."
+                )
+                if _ASSUME_YES:
+                    warn(
+                        f"{d} is not a Ventoy/Visync-managed drive "
+                        "(no .visync/ and no ventoy/ directory) — proceeding "
+                        "because --yes was given."
+                    )
+                else:
+                    error(
+                        f"{d} is not a Ventoy/Visync-managed drive "
+                        "(no .visync/ and no ventoy/ directory)."
+                    )
+                    try:
+                        proceed = typer.confirm("Use this directory anyway?")
+                    except typer.Abort as exc:
+                        error("Aborted.")
+                        raise typer.Exit(1) from exc
+                    if not proceed:
+                        error("Aborted — nothing changed.")
+                        raise typer.Exit(1)
             validated.append(d)
         return validated
 
@@ -69,8 +136,8 @@ def _get_drives(drives: list[Path] | None = None) -> list[Path]:
     while True:
         try:
             raw = typer.prompt("Select drive(s)")
-        except (typer.Abort, EOFError):
-            raise typer.Exit(1)
+        except (typer.Abort, EOFError) as exc:
+            raise typer.Exit(1) from exc
         try:
             indices = [int(x.strip()) for x in raw.split(",") if x.strip()]
             if not indices:
@@ -88,7 +155,88 @@ def _get_drives(drives: list[Path] | None = None) -> list[Path]:
             )
 
 
+def _drives_optional(drive: str | None) -> list[Path]:
+    """Resolve drives for read-only catalogue commands.
+
+    Unlike _get_drives this returns an empty list instead of failing when no
+    Ventoy drive is present. `search` and `info` answer questions about the
+    configured catalogue, which is exactly what someone wants to ask before
+    plugging the drive in; hard-failing meant the only way to browse the
+    catalogue was to have the drive mounted. An explicit --drive is still
+    validated normally, since naming a path that is not there is a typo.
+    """
+    explicit = _parse_drives(drive)
+    if explicit is not None:
+        return _get_drives(explicit)
+    return find_ventoy_drives()
+
+
+def _interruptible(fn):
+    """Turn Ctrl-C into a clean exit(130) instead of a traceback.
+
+    *fn* is the body of a command. Downloads already delete their own in-flight
+    .part file when interrupted (see download._discard_partial), so this only
+    has to stop the spinner, say what happened, and use the conventional exit
+    status for SIGINT. Previously the KeyboardInterrupt reached the interpreter
+    top level, which produced a traceback and — because the handler that was
+    supposed to tidy up lived in download.py's __main__ block, a path the CLI
+    never executes — left partial downloads behind on the drive.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except KeyboardInterrupt:
+            console.print()
+            console.print(
+                "[red]✕ Interrupted.[/red] Partial downloads were removed; "
+                "nothing was changed on the drive."
+            )
+            raise typer.Exit(130) from None
+
+    return wrapper
+
+
+def _sync_one_drive(
+    drive: Path,
+    only: list[str] | None,
+    config: Path | None,
+    dry_run: bool = False,
+    force: bool = False,
+    clean: bool = False,
+    no_verify: bool = False,
+    use_buffer: bool = True,
+    reset_visync: bool = False,
+) -> list[tuple[str, str]]:
+    """Run the sync pipeline for one drive and report what could not be checked.
+
+    Returns the list of ``(clean_name, reason)`` failures so the caller can finish
+    its own bookkeeping before deciding on an exit code. The failure block is
+    printed here so install/update/sync all surface it identically.
+    """
+    from visync.download import sync_all_configured_distros
+
+    _dir, _downloaded, failures = sync_all_configured_distros(
+        dry_run=dry_run,
+        force=force,
+        clean=clean,
+        config_path=config,
+        only=only,
+        drive_override=drive,
+        use_buffer=use_buffer,
+        no_verify=no_verify,
+        reset_visync=reset_visync,
+    )
+    if failures:
+        console.print()
+        error(f"Sync finished with {len(failures)} problem(s):")
+        failure_table(failures)
+    return failures
+
+
 @app.command()
+@_interruptible
 def install(
     name: str | None = typer.Argument(
         default=None, help="Distro name or keyword to install"
@@ -122,8 +270,7 @@ def install(
 
     Use a distro name directly, or pass a file with one name per line.
     """
-    from src.download import sync_all_configured_distros
-    from src.pm import mark_installed, matching_distros, resolve_distro
+    from visync.pm import mark_installed, matching_distros, resolve_distro
 
     config_data = load_config(config)
     target_drives = _get_drives(_parse_drives(drive))
@@ -192,8 +339,8 @@ def install(
             header(f"Drive: {ventoy_root}")
 
         existing = find_installed_isos(ventoy_root)
-        already_on_drive: list[str] = []
         to_download: list[str] = []
+        failures: list[tuple[str, str]] = []
 
         for entry_id, clean_name in to_install:
             found = False
@@ -205,8 +352,12 @@ def install(
                     distro = identify_distro("", iso_path.name)
                 if distro.lower() == clean_name.lower():
                     warn(f"{clean_name} is already on the drive: {iso_path.name}")
-                    mark_installed(ventoy_root, entry_id)
-                    already_on_drive.append(entry_id)
+                    if not dry_run:
+                        mark_installed(
+                            ventoy_root,
+                            entry_id,
+                            version=extract_version_from_filename(iso_path.name) or "",
+                        )
                     found = True
                     break
             if not found:
@@ -226,13 +377,15 @@ def install(
             continue
 
         output_info(f"Installing {len(to_download)} distro(s)...")
-        sync_all_configured_distros(
-            force=True,
-            config_path=config,
-            only=to_download,
-            drive_override=ventoy_root,
-            use_buffer=use_buffer,
-            no_verify=no_verify,
+        failures.extend(
+            _sync_one_drive(
+                drive=ventoy_root,
+                only=to_download,
+                config=config,
+                force=True,
+                use_buffer=use_buffer,
+                no_verify=no_verify,
+            )
         )
 
         # Mark installed if file is now on drive
@@ -254,6 +407,9 @@ def install(
             else:
                 warn(f"{clean_name} — file not found on drive after download")
 
+        if failures:
+            raise typer.Exit(1)
+
 
 @app.command()
 def remove(
@@ -267,14 +423,20 @@ def remove(
     dry_run: bool = typer.Option(
         False, "--dry-run", "-n", help="Show what would be removed without deleting"
     ),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip the confirmation prompt (same as --yes before the command)",
+    ),
 ) -> None:
     """Remove a distro from the Ventoy drive."""
-    from src.finder import remove_iso_metadata
-    from src.pm import mark_removed, matching_distros, resolve_distro
+    from visync.finder import remove_iso_metadata
+    from visync.pm import mark_removed, matching_distros, resolve_distro
 
     config_data = load_config(config)
     target_drives = _get_drives(_parse_drives(drive))
+    skip_confirm = _skip_confirmations(yes)
 
     entry_id = resolve_distro(name, config_data)
     if not entry_id:
@@ -322,17 +484,17 @@ def remove(
                 output_info(f"Would remove {iso_path.name}")
             continue
 
-        if not yes:
+        if not skip_confirm:
             console.print(
                 f"  About to delete {len(matches)} file(s) from {_esc(str(ventoy_root))}:"
             )
             for iso_path in matches:
-                console.print(f"    [red]×[/red] {_esc(iso_path.name)}")
+                console.print(f"    [red]✗[/red] {_esc(iso_path.name)}")
             try:
                 confirmed = typer.confirm("Delete these file(s)?")
-            except typer.Abort:
+            except typer.Abort as exc:
                 error("Aborted — nothing deleted.")
-                raise typer.Exit(1)
+                raise typer.Exit(1) from exc
             if not confirmed:
                 output_info("Aborted — nothing deleted.")
                 continue
@@ -353,6 +515,7 @@ def remove(
 
 
 @app.command()
+@_interruptible
 def update(
     name: str | None = typer.Argument(
         default=None, help="Distro to update (all if omitted)"
@@ -377,15 +540,25 @@ def update(
         "--no-buffer",
         help="Download directly to the Ventoy drive (skip staging buffer)",
     ),
+    reset_visync: bool = typer.Option(
+        False,
+        "--reset-visync",
+        help="Allow the watchdog to wipe .visync/ if it exceeds 1 GiB "
+        "(destroys installed.json; metadata rebuilds on next sync)",
+    ),
 ) -> None:
     """Update installed distros to latest versions."""
-    from src.download import sync_all_configured_distros
-    from src.pm import get_installed_ids, resolve_distro
-    from src.pm import mark_installed as _mark_installed
-    from src.verify import extract_version_from_filename as _extract_ver
+    from visync.pm import (
+        get_installed_ids,
+        mark_installed,
+        matching_distros,
+        resolve_distro,
+    )
 
     config_data = load_config(config)
     target_drives = _get_drives(_parse_drives(drive))
+
+    failures: list[tuple[str, str]] = []
 
     for ventoy_root in target_drives:
         if len(target_drives) > 1:
@@ -395,8 +568,6 @@ def update(
         if name:
             entry_id = resolve_distro(name, config_data)
             if not entry_id:
-                from src.pm import matching_distros
-
                 _, partials = matching_distros(name, config_data)
                 if partials:
                     candidate_names = ", ".join(
@@ -420,15 +591,18 @@ def update(
                 output_info("No distros installed. Use 'visync install <name>' first.")
                 continue
 
-        sync_all_configured_distros(
-            dry_run=dry_run,
-            force=force,
-            clean=clean,
-            config_path=config,
-            only=only,
-            drive_override=ventoy_root,
-            no_verify=no_verify,
-            use_buffer=not no_staging,
+        failures.extend(
+            _sync_one_drive(
+                drive=ventoy_root,
+                only=only,
+                config=config,
+                dry_run=dry_run,
+                force=force,
+                clean=clean,
+                no_verify=no_verify,
+                use_buffer=not no_staging,
+                reset_visync=reset_visync,
+            )
         )
 
         if not dry_run:
@@ -444,9 +618,12 @@ def update(
                         else identify_distro("", iso_path.name)
                     )
                     if distro.lower() == clean_name.lower():
-                        version = _extract_ver(iso_path.name) or ""
-                        _mark_installed(ventoy_root, eid, version=version)
+                        version = extract_version_from_filename(iso_path.name) or ""
+                        mark_installed(ventoy_root, eid, version=version)
                         break
+
+    if failures:
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -462,7 +639,7 @@ def search(
     ),
 ) -> None:
     """Search available distros."""
-    from src.pm import get_installed_ids, resolve_distro
+    from visync.pm import get_installed_ids, resolve_distro
 
     config_data = load_config(config)
     distros = config_data.get("distros", {})
@@ -471,7 +648,7 @@ def search(
         warn("No distros configured.")
         return
 
-    target_drives = _get_drives(_parse_drives(drive))
+    target_drives = _drives_optional(drive)
 
     # Collect installed status across all drives
     installed_by_drive: dict[Path, set[str]] = {}
@@ -489,6 +666,10 @@ def search(
             console.print(f"    strategy: {s.get('strategy', '?')}")
             if s.get("base_url"):
                 console.print(f"    url: {_esc(str(s['base_url']))}")
+            if not target_drives:
+                console.print(
+                    "    [dim]no Ventoy drive detected — install status unknown[/dim]"
+                )
             for vr in target_drives:
                 status = (
                     "installed" if entry_id in installed_by_drive[vr] else "available"
@@ -535,14 +716,22 @@ def search(
             console.print(f"    {'':3} {_esc(name):<25} {_esc(strategy):<20} {markers}")
     else:
         for drive_status, name, strategy in rows:
-            marker = (
-                f"[green]{drive_status[0]}[/green]"
-                if drive_status[0] == "+"
-                else f"[dim]{drive_status[0]}[/dim]"
-            )
-            console.print(f"    {marker} {_esc(name)} [dim]({_esc(strategy)})[/dim]")
+            if drive_status:
+                marker = (
+                    f"[green]{drive_status[0]}[/green]"
+                    if drive_status[0] == "+"
+                    else f"[dim]{drive_status[0]}[/dim]"
+                )
+                console.print(
+                    f"    {marker} {_esc(name)} [dim]({_esc(strategy)})[/dim]"
+                )
+            else:
+                console.print(f"      {_esc(name)} [dim]({_esc(strategy)})[/dim]")
     console.print()
-    console.print("  [dim]+ = installed[/dim]")
+    if target_drives:
+        console.print("  [dim]+ = installed[/dim]")
+    else:
+        console.print("  [dim]no Ventoy drive detected — showing catalogue only[/dim]")
 
 
 @app.command()
@@ -556,7 +745,7 @@ def info(
     ),
 ) -> None:
     """Show details about a distro."""
-    from src.pm import get_installed_ids, resolve_distro
+    from visync.pm import get_installed_ids, resolve_distro
 
     config_data = load_config(config)
     distros = config_data.get("distros", {})
@@ -567,7 +756,7 @@ def info(
         raise typer.Exit(1)
 
     s = distros[entry_id]
-    target_drives = _get_drives(_parse_drives(drive))
+    target_drives = _drives_optional(drive)
 
     console.print()
     console.print(f"  [bold]{_esc(str(s.get('clean_name', entry_id)))}[/bold]")
@@ -580,6 +769,8 @@ def info(
     console.print(f"    checksums: {s.get('checksum_format', 'none')}")
 
     clean_name = s.get("clean_name", entry_id)
+    if not target_drives:
+        console.print("    [dim]no Ventoy drive detected — nothing to report on[/dim]")
     for vr in target_drives:
         installed = set(get_installed_ids(vr))
         status = (
@@ -621,7 +812,7 @@ def autodetect(
     ),
 ) -> None:
     """Auto-detect ISOs on the drive and mark them as installed."""
-    from src.pm import mark_installed
+    from visync.pm import get_installed_ids, mark_installed
 
     config_data = load_config(config)
     target_drives = _get_drives(_parse_drives(drive))
@@ -633,6 +824,11 @@ def autodetect(
             header(f"Drive: {ventoy_root}")
 
         existing = find_installed_isos(ventoy_root)
+        # Read installed.json once per drive and keep it up to date as we
+        # register. Re-reading it inside the loop re-parsed the file for every
+        # ISO on the drive, and the only reason it was correct there was that
+        # mark_installed happened to write the new entry back out.
+        installed = set(get_installed_ids(ventoy_root))
         found = 0
         for iso_path in existing:
             vid = get_iso_volume_id(iso_path)
@@ -653,21 +849,12 @@ def autodetect(
                     break
             if not entry_id:
                 # Fallback: check if any config keyword appears in the filename
-                from src.finder import keyword_hit
-
                 for eid, s in distros.items():
                     keyword = s.get("keyword", "")
                     if keyword and keyword_hit(keyword, file_lower):
                         entry_id = eid
                         break
-            if not entry_id:
-                continue
-
-            # Check if already marked
-            from src.pm import get_installed_ids
-
-            installed = set(get_installed_ids(ventoy_root))
-            if entry_id in installed:
+            if not entry_id or entry_id in installed:
                 continue
 
             version = extract_version_from_filename(iso_path.name) or ""
@@ -676,6 +863,7 @@ def autodetect(
                 found += 1
             else:
                 mark_installed(ventoy_root, entry_id, version=version)
+                installed.add(entry_id)
                 success(f"Detected {distro}: {iso_path.name}")
                 found += 1
 
@@ -689,9 +877,6 @@ def autodetect(
 
 @app.command("list")
 def list_isos(
-    config: Path | None = typer.Option(
-        None, "--config", "-c", help="Path to config file"
-    ),
     drive: str | None = typer.Option(
         None,
         "--drive",
@@ -700,6 +885,10 @@ def list_isos(
     ),
 ) -> None:
     """List ISOs on the Ventoy drive with distro, version, and size."""
+    # No --config here: this command reads the drive and the metadata sidecars,
+    # and identify_distro resolves against the installed catalogue. An accepted
+    # --config that changed nothing was worse than none, because a user who set
+    # it reasonably expected their file to be used.
     target_drives = _get_drives(_parse_drives(drive))
 
     for iso_dir in target_drives:
@@ -715,6 +904,7 @@ def list_isos(
         all_meta = load_all_metadata(iso_dir)
 
         rows = []
+        total_gb_val = 0.0
         for iso_path in sorted(iso_paths, key=lambda p: p.name):
             meta = all_meta.get(iso_path.name)
             if meta:
@@ -724,16 +914,17 @@ def list_isos(
                 vid = get_iso_volume_id(iso_path)
                 distro = identify_distro(vid, iso_path.name)
                 version = extract_version_from_filename(iso_path.name) or "—"
+            # One stat per file: the total is accumulated here rather than
+            # recomputed in a second pass, which used to walk the drive twice.
             size_gb = iso_path.stat().st_size / (1024**3)
+            total_gb_val += size_gb
             rows.append((distro, version, f"{size_gb:.1f}G", iso_path.name))
 
-        total_gb_val = sum(
-            iso_path.stat().st_size / (1024**3) for iso_path in iso_paths
-        )
         iso_table(rows, total_gb_val)
 
 
 @app.command()
+@_interruptible
 def sync(
     config: Path | None = typer.Option(
         None, "--config", "-c", help="Path to config file"
@@ -752,7 +943,10 @@ def sync(
         "--clean",
         help="Remove old versions of the same distro (dry-run by default)",
     ),
-    all: bool = typer.Option(
+    # Named sync_all, not all: `all` is a builtin, and shadowing it inside the
+    # function body made `if all:` read like a filter on something else. The
+    # user-facing flag is unchanged.
+    sync_all: bool = typer.Option(
         False, "--all", "-a", help="Sync all configured distros (not just installed)"
     ),
     no_verify: bool = typer.Option(
@@ -764,19 +958,26 @@ def sync(
         "--no-buffer",
         help="Download directly to the Ventoy drive (skip staging buffer)",
     ),
+    reset_visync: bool = typer.Option(
+        False,
+        "--reset-visync",
+        help="Allow the watchdog to wipe .visync/ if it exceeds 1 GiB "
+        "(destroys installed.json; metadata rebuilds on next sync)",
+    ),
 ) -> None:
     """Sync installed distros to the Ventoy drive."""
-    from src.download import sync_all_configured_distros
-    from src.pm import get_installed_ids
+    from visync.pm import get_installed_ids
 
     target_drives = _get_drives(_parse_drives(drive))
+
+    failures: list[tuple[str, str]] = []
 
     for drive_root in target_drives:
         if len(target_drives) > 1:
             console.print()
             header(f"Drive: {drive_root}")
 
-        if all:
+        if sync_all:
             only = None  # None = sync everything
         else:
             only = get_installed_ids(drive_root)
@@ -786,16 +987,22 @@ def sync(
                 )
                 continue
 
-        sync_all_configured_distros(
-            dry_run=dry_run,
-            force=force,
-            clean=clean,
-            config_path=config,
-            only=only,
-            drive_override=drive_root,
-            no_verify=no_verify,
-            use_buffer=not no_staging,
+        failures.extend(
+            _sync_one_drive(
+                drive=drive_root,
+                only=only,
+                config=config,
+                dry_run=dry_run,
+                force=force,
+                clean=clean,
+                no_verify=no_verify,
+                use_buffer=not no_staging,
+                reset_visync=reset_visync,
+            )
         )
+
+    if failures:
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -811,7 +1018,7 @@ def verify(
     ),
 ) -> None:
     """Verify integrity of ISOs on the Ventoy drive."""
-    from src.verify import UNAVAILABLE
+    from visync.verify import VerifyStatus
 
     config_data = load_config(config)
     target_drives = _get_drives(_parse_drives(drive))
@@ -832,15 +1039,15 @@ def verify(
             continue
 
         any_results = True
-        for iso_path, distro, result in results:
+        for iso_path, distro, status in results:
             label = f"{iso_path.name} ({distro})"
-            if result is True:
+            if status is VerifyStatus.VERIFIED:
                 success(label)
                 verified += 1
-            elif result is False:
+            elif status is VerifyStatus.MISMATCH:
                 error(f"{label} — checksum mismatch")
                 failed += 1
-            elif result == UNAVAILABLE:
+            elif status is VerifyStatus.UNAVAILABLE:
                 error(f"{label} — checksum could not be obtained (not verified)")
                 unavailable += 1
             else:
@@ -862,25 +1069,28 @@ def verify(
 
 @app.command("nuke-metadata")
 def nuke_metadata(
-    config: Path | None = typer.Option(
-        None, "--config", "-c", help="Path to config file"
-    ),
     drive: str | None = typer.Option(
         None, "--drive", "-d", help="Ventoy drive path(s), comma-separated for multiple"
     ),
     dry_run: bool = typer.Option(
         False, "--dry-run", "-n", help="Show what would be deleted without deleting"
     ),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip the confirmation prompt (same as --yes before the command)",
+    ),
 ) -> None:
     """Delete all ISO metadata from .visync/metadata/.
 
     Keeps installed.json and other state. Metadata rebuilds on next sync.
     Only .json metadata files are eligible for deletion.
     """
-    from src.finder import _guard_json_only
+    from visync.finder import _guard_json_only
 
     target_drives = _get_drives(_parse_drives(drive))
+    skip_confirm = _skip_confirmations(yes)
 
     for ventoy_root in target_drives:
         if len(target_drives) > 1:
@@ -914,17 +1124,17 @@ def nuke_metadata(
                 console.print(f"    [cyan]→[/cyan] {_esc(f.name)}")
             continue
 
-        if not yes:
+        if not skip_confirm:
             console.print(
                 f"  About to delete {len(json_files)} metadata file(s) from {_esc(str(ventoy_root))}:"
             )
             for f in json_files:
-                console.print(f"    [red]×[/red] {_esc(f.name)}")
+                console.print(f"    [red]✗[/red] {_esc(f.name)}")
             try:
                 confirmed = typer.confirm("Delete these file(s)?")
-            except typer.Abort:
+            except typer.Abort as exc:
                 error("Aborted — nothing deleted.")
-                raise typer.Exit(1)
+                raise typer.Exit(1) from exc
             if not confirmed:
                 output_info("Aborted — nothing deleted.")
                 continue
@@ -943,10 +1153,10 @@ def nuke_metadata(
 
         for f in skipped:
             warn(f"Not metadata — left in place: {f.name}")
-        try:
+        # The directory is not empty when non-metadata files were left in it,
+        # which is not an error — the caller has already reported them.
+        with contextlib.suppress(OSError):
             metadata_dir.rmdir()
-        except OSError:
-            pass
         output_info("Metadata will rebuild on next sync.")
 
 

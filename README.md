@@ -4,11 +4,19 @@ Ventoy Package Manager. Install, update, and manage Linux distros on your Ventoy
 
 ## Install
 
+Requires Python 3.11+ and a mounted Ventoy drive.
+
 ```bash
-pip install -e .
+pip install visync
 ```
 
-Requires Python 3.11+ and a mounted Ventoy drive.
+For a development checkout:
+
+```bash
+pip install -e ".[dev]"
+```
+
+Both layouts work out of the box: `config.toml` ships inside the installed package, so `visync search` finds the distro list from any directory.
 
 ## Quick Start
 
@@ -60,6 +68,7 @@ visync verify
 | `visync sync` [--no-staging] | Sync installed distros to latest |
 | `visync sync --all` [--no-staging] | Sync all configured distros |
 | `visync sync --clean` [--no-staging] | Remove old versions of same distro |
+| `visync sync --reset-visync` | Allow the watchdog to wipe an over-budget `.visync/` |
 | `visync list` | List ISOs on the drive |
 | `visync autodetect` | Register existing ISOs as installed |
 | `visync verify` | Verify checksums against upstream |
@@ -90,43 +99,50 @@ Blank lines and lines starting with `#` are ignored.
 
 Edit `config.toml` to add or remove distros. Each distro entry defines a scraping strategy, mirror URL, and checksum verification method.
 
-Config resolution order: explicit `--config` path, then `$VISYNC_CONFIG`, then `~/.config/visync/config.toml`, then the packaged `config.toml`. A `config.toml` in the current directory is only used as a last resort, so planted configs cannot hijack identification.
+Config resolution order: explicit `--config` path, then `$VISYNC_CONFIG`, then `~/.config/visync/config.toml`, then the `config.toml` shipped inside the installed package. A `config.toml` in the current directory is only used as a last resort, so planted configs cannot hijack identification.
+
+**Release selection:** `version_filter` restricts a scraper to one release family before the newest match is chosen. Ubuntu entries use `\d*[02468]\.04(\.\d+)*` so they track the current LTS (26.04.1) and ignore interim releases (25.10, 26.10). NixOS resolves the newest stable `YY.MM` channel from the release bucket at scrape time, so it advances to the next stable without a config edit; set `channel = "26.05"` to pin deliberately while that channel is current.
 
 **Built-in strategies:**
 
 | Strategy | Description | Example |
 |---|---|---|
-| `direct_match` | Flat index page | Arch Linux, Omarchy |
+| `direct_match` | Flat index page | Arch Linux |
 | `fedora_nested` | Version dirs + variant subdirs | Fedora, Fedora KDE |
 | `ubuntu_nested` | Version dirs | Ubuntu, Parrot Security |
-| `nixos_channel` | Channel page + version parse | NixOS Minimal, NixOS Graphical |
+| `nixos_channel` | Stable-channel lookup + channel page parse | NixOS Minimal, NixOS Graphical |
 | `popos_api` | JSON API | Pop!_OS |
 | `tails_api` | JSON API | Tails |
 
-**Checksum formats:** `gpg_checksum` (Fedora), `sha256sums` (Ubuntu, Arch, NixOS, Tails), `json` (Tails)
+**Checksum formats:** `gpg_checksum` (Fedora — inline `SHA256 (file) = hash`), `sha256sums` (Ubuntu, Arch, Parrot, NixOS, Tails), `json` (Tails)
+
+Signature checking is configured separately via `signing_key_url` + `signing_key_fingerprint` and works with any signed layout, so Parrot's sectioned hash list gets both a signature check and a digest check.
 
 ## How it works
 
 1. **Detect** — finds mounted Ventoy drives on Windows, macOS, or Linux (with udisksctl automount)
-2. **Scrape** — concurrent mirror scraping with TCP pre-flight checks and watchdog timeouts
-3. **Compare** — version-aware comparison (semantic or date-based) against local ISOs
-4. **Download** — streaming downloads with staging buffer (less drive wear), falls back to direct if staging full. Use `--no-staging` / `--no-buffer` to skip the staging buffer and download directly to the Ventoy drive.
-5. **Verify** — optional checksum verification against published hashes
-6. **Clean** — `--clean` removes deprecated ISOs of the same distro variant (dry-run by default)
-7. **State** — tracks installed distros in `.visync/installed.json`
+2. **Scrape** — concurrent mirror scraping with TCP pre-flight checks and watchdog timeouts. A distro whose mirror can't be read is reported with the reason and makes the command exit non-zero; it is never silently counted as up to date
+3. **Select** — release-family filters keep scrapers on the intended series: Ubuntu tracks the current **LTS** (even-year `.04`, skipping interim releases and beta-only directories), and NixOS resolves the current **stable** channel from the release bucket instead of pinning a version string
+4. **Compare** — version-aware comparison (semantic or date-based) against local ISOs
+5. **Download** — streaming downloads with staging buffer (less drive wear), falls back to direct if staging full. Use `--no-staging` / `--no-buffer` to skip the staging buffer and download directly to the Ventoy drive.
+6. **Verify** — optional checksum verification against published hashes
+7. **Clean** — `--clean` removes deprecated ISOs of the same distro variant (dry-run by default)
+8. **State** — tracks installed distros in `.visync/installed.json`
 
 ## Safety
 
-- `--clean` is dry-run by default, and `--dry-run` is always honored — `sync --clean --dry-run` never deletes
+- `--clean` is dry-run by default, and `--dry-run` never modifies the drive — `sync --clean --dry-run` deletes nothing and does not touch `.visync/`
 - `remove` and `nuke-metadata` show exactly what will be deleted and ask for confirmation (`--yes` skips)
 - Ambiguous distro queries are refused with candidate lists instead of acting on an arbitrary match
 - Distro matching uses whole-token keywords (`pop` does not match `popcorn.iso`)
-- `.visync/` watchdog enforces a 1 GiB ceiling (deep clean orphaned metadata, then wipe)
+- `.visync/` watchdog enforces a 1 GiB ceiling by deep-cleaning orphaned metadata. Wiping `.visync/` entirely is **opt-in** via `sync --reset-visync`, because it destroys `installed.json` and every registration
+- The watchdog never runs on `--dry-run`
 - Guardrails prevent deletion of `.iso` or `.img` files under any circumstance — including inside `.visync/metadata`
 - Downloads use parallel range requests with per-chunk HTTP 206 and byte-count validation; truncated or range-ignoring servers fail loudly instead of producing silent corruption
 - Checksum mismatch deletes the download; an *unreachable* checksum source keeps the file and warns (`UNVERIFIED`)
 - HTTPS is enforced for all mirrors and checksum sources (loopback exempt); https→http redirects are blocked
-- Fedora GPG verification supports fingerprint pinning via `signing_key_fingerprint`
+- GPG signature verification supports fingerprint pinning via `signing_key_fingerprint`, and applies to any signed checksum file regardless of its digest layout (Fedora's inline `SHA256 (file) = hash`, Parrot's sectioned md5/sha256/sha512 list)
+- When multiple digests for the same file appear in one signed list, the configured `checksum_algo` selects the section — a first-match parser would compare an MD5 against a SHA-256 and delete a good download as corrupt
 - Failed downloads clean up `.part` files automatically
 - Install verifies file exists on drive before marking as installed
 - State and metadata writes are atomic (tmp file + rename)
@@ -136,6 +152,8 @@ Config resolution order: explicit `--config` path, then `$VISYNC_CONFIG`, then `
 ```bash
 python3 -m pytest test/ -v
 ```
+
+CI installs from the committed `uv.lock` so a dependency release cannot break the build without a diff. `uv` is used for reproducible CI and builds only — installing visync itself with `pip` is fully supported.
 
 ## Debug
 

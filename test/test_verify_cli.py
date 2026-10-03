@@ -8,7 +8,8 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.verify import (
+from visync.verify import (
+    VerifyStatus,
     expand_url,
     extract_iso_metadata,
     index_distro_configs,
@@ -136,8 +137,8 @@ class TestResolveDistroSettings(unittest.TestCase):
 
 
 class TestRunDirectoryVerify(unittest.TestCase):
-    @patch("src.verify.verify_from_config")
-    @patch("src.verify.build_iso_distro_map")
+    @patch("visync.verify.verify_from_config")
+    @patch("visync.verify.build_iso_distro_map")
     def test_runs_one_verify_per_iso(
         self, mock_map: MagicMock, mock_verify: MagicMock
     ) -> None:
@@ -161,21 +162,21 @@ class TestRunDirectoryVerify(unittest.TestCase):
             results = run_directory_verify(Path(tmpdir), config)
 
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0][2], True)
+        self.assertIs(results[0][2], VerifyStatus.VERIFIED)
         mock_verify.assert_called_once()
 
 
 @unittest.skipUnless(HAS_TYPER, "typer not installed")
 class TestVerifyCommand(unittest.TestCase):
     def setUp(self) -> None:
-        from src.main import app
+        from visync.main import app
 
         self.app = app
         self.runner = CliRunner()
 
-    @patch("src.main.run_directory_verify")
-    @patch("src.main.find_ventoy_drives")
-    @patch("src.main.load_config")
+    @patch("visync.main.run_directory_verify")
+    @patch("visync.main.find_ventoy_drives")
+    @patch("visync.main.load_config")
     def test_verify_command_success(
         self,
         mock_load: MagicMock,
@@ -186,7 +187,9 @@ class TestVerifyCommand(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             fake_drive = Path(tmpdir)
             mock_drives.return_value = [fake_drive]
-            mock_run.return_value = [(fake_drive / "arch.iso", "Arch Linux", True)]
+            mock_run.return_value = [
+                (fake_drive / "arch.iso", "Arch Linux", VerifyStatus.VERIFIED)
+            ]
 
             result = self.runner.invoke(self.app, ["verify"])
 
@@ -194,13 +197,15 @@ class TestVerifyCommand(unittest.TestCase):
             self.assertIn("✓", result.stdout)
             self.assertIn("1 verified", result.stdout)
 
-    @patch("src.main.run_directory_verify")
-    @patch("src.main.load_config")
+    @patch("visync.main.run_directory_verify")
+    @patch("visync.main.load_config")
     def test_verify_command_fails_on_bad_checksum(
         self, mock_load: MagicMock, mock_run: MagicMock
     ) -> None:
         mock_load.return_value = {"checksums": {"enabled": True}, "distros": {}}
-        mock_run.return_value = [(Path("/tmp/bad.iso"), "Arch Linux", False)]
+        mock_run.return_value = [
+            (Path("/tmp/bad.iso"), "Arch Linux", VerifyStatus.MISMATCH)
+        ]
 
         with tempfile.TemporaryDirectory() as tmpdir:
             result = self.runner.invoke(self.app, ["verify", "--drive", tmpdir])
@@ -209,8 +214,8 @@ class TestVerifyCommand(unittest.TestCase):
         output = result.stdout + result.stderr
         self.assertIn("✗", output)
 
-    @patch("src.main.find_ventoy_drives", return_value=[])
-    @patch("src.main.load_config", return_value={})
+    @patch("visync.main.find_ventoy_drives", return_value=[])
+    @patch("visync.main.load_config", return_value={})
     def test_verify_command_no_ventoy(
         self, _load: MagicMock, _drives: MagicMock
     ) -> None:
