@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from src.download import DistroCheck, SyncStatus
 from src.finder import load_config
 from src.pm import (
     get_installed_ids,
@@ -398,6 +399,8 @@ class TestSyncFiltering(unittest.TestCase):
     @patch("src.download.sync_all_configured_distros")
     def test_sync_all_bypasses_installed_filter(self, mock_sync, mock_drives):
         """sync --all does not filter by installed list."""
+        # (download_dir, downloaded, unreachable)
+        mock_sync.return_value = (None, [], [])
         with tempfile.TemporaryDirectory() as tmp:
             drive = _make_drive(Path(tmp))
             mock_drives.return_value = [drive]
@@ -405,6 +408,57 @@ class TestSyncFiltering(unittest.TestCase):
             self.assertEqual(result.exit_code, 0)
             self.assertNotIn("No distros installed", result.stdout)
             mock_sync.assert_called_once()
+
+    @patch("src.main.find_ventoy_drives")
+    @patch("src.download.sync_all_configured_distros")
+    def test_sync_exits_nonzero_when_a_distro_is_unreachable(
+        self, mock_sync, mock_drives
+    ):
+        """An unreadable mirror must surface and set a non-zero exit code."""
+        mock_sync.return_value = (None, [], [("Ubuntu Server", "HTTP Error 404")])
+        with tempfile.TemporaryDirectory() as tmp:
+            drive = _make_drive(Path(tmp))
+            mock_drives.return_value = [drive]
+            result = self.runner.invoke(self.app, ["sync", "--all"])
+            self.assertEqual(result.exit_code, 1)
+            self.assertIn("Sync finished with 1 problem", result.stdout)
+            self.assertIn("Ubuntu Server", result.stdout)
+            self.assertIn("HTTP Error 404", result.stdout)
+
+    @patch("src.download._sweep_old_versions")
+    @patch("src.download.visync_watchdog")
+    @patch("src.download._check_distro")
+    @patch("src.download.load_config")
+    def test_sync_reports_entry_ids_missing_from_config(
+        self, mock_cfg, mock_check, _wd, _sweep
+    ):
+        """A distro left in installed.json but dropped from config must be reported."""
+        mock_cfg.return_value = {
+            "iso": {},
+            "checksums": {"enabled": False},
+            "distros": {"ArchLinux": {"clean_name": "Arch Linux"}},
+        }
+        mock_check.return_value = DistroCheck(
+            "ArchLinux", "Arch Linux", "a.iso", SyncStatus.CURRENT, None
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            drive = _make_drive(Path(tmp))
+            (drive / ".visync").mkdir(exist_ok=True)
+            (drive / ".visync" / "installed.json").write_text('{"Omarchy": {}}')
+
+            from src.download import sync_all_configured_distros
+
+            _dir, _dl, failures = sync_all_configured_distros(
+                dry_run=True,
+                only=["ArchLinux", "Omarchy"],
+                drive_override=drive,
+                use_buffer=False,
+            )
+
+        reasons = dict(failures)
+        self.assertIn("Omarchy", reasons)
+        self.assertIn("no longer configured", reasons["Omarchy"])
+        self.assertNotIn("ArchLinux", reasons)
 
 
 # ── .img File Support Tests ─────────────────────────────────────

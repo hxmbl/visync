@@ -135,6 +135,36 @@ class TestInstall(unittest.TestCase):
             self.assertEqual(result.exit_code, 0)
             self.assertIn("already on the drive", result.stdout)
 
+    @patch("src.main.identify_distro", side_effect=_mock_identify_distro)
+    @patch("src.main.get_iso_volume_id", side_effect=_mock_get_vid)
+    @patch("src.main.find_installed_isos", side_effect=_mock_find_installed)
+    @patch("src.main.load_config")
+    def test_install_dry_run_leaves_state_file_untouched(
+        self, mock_cfg: MagicMock, *_: MagicMock
+    ) -> None:
+        """--dry-run must not rewrite installed.json, nor blank a recorded version."""
+        mock_cfg.return_value = MOCK_CONFIG
+        with tempfile.TemporaryDirectory() as tmpdir:
+            iso = Path(tmpdir) / "archlinux-2026.iso"
+            iso.write_bytes(b"\x00" * 1024)
+            state = Path(tmpdir) / ".visync" / "installed.json"
+            state.parent.mkdir(parents=True)
+            state.write_text(
+                '{"ArchLinux": {"installed_at": "2026-01-01T00:00:00+00:00",'
+                ' "version": "2026.01.01"}}'
+            )
+            before = state.read_bytes()
+
+            result = runner.invoke(
+                app, ["install", "archlinux", "--drive", tmpdir, "--dry-run"]
+            )
+
+            self.assertEqual(result.exit_code, 0)
+            self.assertEqual(
+                state.read_bytes(), before, "--dry-run must not write drive state"
+            )
+            self.assertIn("2026.01.01", state.read_text(), "version must survive")
+
     def test_install_file_not_found(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             result = runner.invoke(

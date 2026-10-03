@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.download import (
     DEBUG,
+    SyncStatus,
     _check_distro,
     _cleanup_old_versions,
     _variant_stem,
@@ -617,8 +618,8 @@ class TestCheckDistro(unittest.TestCase):
         settings = {"clean_name": "Arch Linux"}
 
         result = _check_distro("arch", settings, Path("/tmp"), force=False)
-        self.assertFalse(result[3])  # up_to_date should be False
-        self.assertIsNotNone(result[4])  # download_url present
+        self.assertIs(result.status, SyncStatus.STALE)
+        self.assertIsNotNone(result.download_url)
         _ok("Correctly identifies new version available")
 
     @patch("src.download.find_installed_isos")
@@ -633,7 +634,7 @@ class TestCheckDistro(unittest.TestCase):
         settings = {"clean_name": "Arch Linux"}
 
         result = _check_distro("arch", settings, Path("/tmp"), force=False)
-        self.assertTrue(result[3])  # up_to_date
+        self.assertIs(result.status, SyncStatus.CURRENT)
         _ok("Correctly skips when version matches")
 
     @patch("src.download.find_installed_isos")
@@ -650,9 +651,21 @@ class TestCheckDistro(unittest.TestCase):
         settings = {"clean_name": "Arch Linux"}
 
         result = _check_distro("arch", settings, Path("/tmp"), force=True)
-        self.assertFalse(result[3])  # up_to_date should be False (forced)
-        self.assertIsNotNone(result[4])  # download_url present
+        self.assertIs(result.status, SyncStatus.STALE)
+        self.assertIsNotNone(result.download_url)
         _ok("--force correctly bypasses version check")
+
+    @patch("src.download.find_installed_isos", return_value=[])
+    @patch("src.download.process_scraping_strategy", return_value=("", ""))
+    def test_unreachable_when_scrape_fails(self, _mock_scrape, _mock_find):
+        """A mirror we cannot read must be UNREACHABLE, never CURRENT."""
+        _section("_check_distro: Unreachable mirror")
+        settings = {"clean_name": "Arch Linux"}
+
+        result = _check_distro("arch", settings, Path("/tmp"), force=False)
+        self.assertIs(result.status, SyncStatus.UNREACHABLE)
+        self.assertIsNone(result.download_url)
+        _ok("failed scrape reports UNREACHABLE with a reason")
 
 
 class TestCleanupOldVersions(unittest.TestCase):

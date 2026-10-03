@@ -10,7 +10,9 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from enum import StrEnum
 from pathlib import Path
+from typing import NamedTuple
 from urllib.parse import urlparse
 
 from rich.markup import escape as _esc
@@ -57,6 +59,42 @@ MIRROR_CONNECT_TIMEOUT = 5
 MIRROR_HTTP_TIMEOUT = 10
 SCRAPE_DEADLINE = 120
 DEFAULT_STAGING_DIR = Path.home() / ".cache" / "visync" / "staging"
+
+
+class SyncStatus(StrEnum):
+    """Outcome of checking one distro against its upstream mirror.
+
+    UNREACHABLE is deliberately distinct from CURRENT: "the mirror is down or
+    its page shape changed" must never be reported as "nothing to do", or a
+    broken scraper silently stops updating forever.
+    """
+
+    CURRENT = "current"
+    STALE = "stale"
+    UNREACHABLE = "unreachable"
+
+
+class DistroCheck(NamedTuple):
+    """Result of scraping and version-comparing one configured distro."""
+
+    entry_id: str
+    clean_name: str
+    latest_filename: str
+    status: SyncStatus
+    download_url: str | None
+    reason: str = ""
+
+
+def _unreachable(entry_id: str, clean_name: str, reason: str) -> DistroCheck:
+    """Build an UNREACHABLE result carrying an actionable reason."""
+    return DistroCheck(
+        entry_id,
+        clean_name,
+        "",
+        SyncStatus.UNREACHABLE,
+        None,
+        reason.strip() or "could not resolve an ISO from the mirror",
+    )
 
 
 def ping_mirror(url: str) -> bool:
@@ -113,45 +151,59 @@ def _safe_filename(name: str) -> str:
 
 
 def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
-    """Resolve specific folder parsing pipelines based on the configured strategy."""
+    """Resolve specific folder parsing pipelines based on the configured strategy.
+
+    On failure returns ``("", "")`` and records an actionable, one-line reason in
+    ``settings["resolve_error"]``. Callers surface that reason to the user instead
+    of a generic "unable to reach mirror", so an upstream page-shape change is
+    distinguishable from a transient network fault.
+    """
     strategy = settings.get("strategy")
     base_url = str(settings.get("base_url") or "")
     iso_regex = str(settings.get("iso_regex") or "")
     version_regex = str(settings.get("version_regex") or "")
+    settings["resolve_error"] = ""
+
+    def fail(reason: str) -> tuple[str, str]:
+        settings["resolve_error"] = reason
+        return "", ""
 
     # Pre-flight connectivity check — skip dead mirrors instantly
     if base_url and not ping_mirror(base_url):
         warn(f"Mirror unreachable (ping failed): {base_url}")
-        return "", ""
+        return fail(f"no route to mirror {base_url}")
 
     # Strategy A: Direct Index File Tracking (e.g. Arch Linux)
     if strategy == "direct_match":
         if not base_url or not iso_regex:
             warn(f"{name} — direct_match requires base_url and iso_regex")
-            return "", ""
+            return fail("config incomplete: needs base_url + iso_regex")
         html = fetch_html(base_url)
         if not html:
-            return "", ""
+            return fail(f"could not fetch index page {base_url}")
         match = re.search(iso_regex, html)
         if match:
             filename = _safe_filename(match.group(1))
+            if not filename:
+                return fail(f"index page {base_url} matched an unsafe filename")
             return filename, f"{base_url.rstrip('/')}/{filename}"
+        return fail(f"iso_regex matched nothing on {base_url}")
 
     # Strategy B: Two-Tier Version Directory Traversal for Fedora
     elif strategy == "fedora_nested":
         if not base_url or not iso_regex or not version_regex:
             warn(f"{name} — fedora_nested requires base_url, iso_regex, version_regex")
-            return "", ""
+            return fail("config incomplete: needs base_url + iso_regex + version_regex")
         root_html = fetch_html(base_url)
         if not root_html:
-            return "", ""
+            return fail(f"could not fetch releases index {base_url}")
         versions = [
             v.strip().rstrip("/")
             for v in re.findall(version_regex, root_html)
             if v.strip().rstrip("/")
         ]
         if not versions:
-            return "", ""
+            return fail(f"no version directories matched at {base_url}")
 
         versions.sort(key=lambda x: parse_version(x) or ())
         latest_version = versions[-1].rstrip("/")
@@ -160,27 +212,28 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
         iso_dir_url = f"{base_url}{latest_version}/{variant_path}/"
         iso_html = fetch_html(iso_dir_url)
         if not iso_html:
-            return "", ""
+            return fail(f"could not fetch ISO directory {iso_dir_url}")
 
         match = re.search(iso_regex, iso_html)
         if match:
             return match.group(1), f"{iso_dir_url}{match.group(1)}"
+        return fail(f"iso_regex matched nothing in {iso_dir_url}")
 
     # Strategy C: Directory Sub-paths for Ubuntu Ecosystem Releases
     elif strategy == "ubuntu_nested":
         if not base_url or not iso_regex or not version_regex:
             warn(f"{name} — ubuntu_nested requires base_url, iso_regex, version_regex")
-            return "", ""
+            return fail("config incomplete: needs base_url + iso_regex + version_regex")
         root_html = fetch_html(base_url)
         if not root_html:
-            return "", ""
+            return fail(f"could not fetch releases index {base_url}")
         versions = [
             v.strip().rstrip("/")
             for v in re.findall(version_regex, root_html)
             if v.strip().rstrip("/")
         ]
         if not versions:
-            return "", ""
+            return fail(f"no version directories matched at {base_url}")
 
         versions.sort(key=lambda x: parse_version(x) or ())
         latest_version = versions[-1].rstrip("/")
@@ -188,20 +241,21 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
         iso_dir_url = f"{base_url}{latest_version}/"
         iso_html = fetch_html(iso_dir_url)
         if not iso_html:
-            return "", ""
+            return fail(f"could not fetch release directory {iso_dir_url}")
 
         match = re.search(iso_regex, iso_html)
         if match:
             return match.group(1), f"{iso_dir_url}{match.group(1)}"
+        return fail(f"iso_regex matched nothing in {iso_dir_url} (upstream layout?)")
 
     # Strategy D: NixOS channel page — parse version, construct ISO URL
     elif strategy == "nixos_channel":
         if not base_url:
             warn(f"{name} — nixos_channel requires base_url")
-            return "", ""
+            return fail("config incomplete: needs base_url")
         html = fetch_html(base_url)
         if not html:
-            return "", ""
+            return fail(f"could not fetch channel page {base_url}")
 
         # The channel page contains text like "nixos-26.05 release nixos-26.05.1947.a0374025a863"
         version_match = re.search(
@@ -209,7 +263,7 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
         )
         if not version_match:
             warn(f"{name} — could not parse NixOS version from channel page")
-            return "", ""
+            return fail(f"could not parse release id from channel page {base_url}")
 
         full_version = version_match.group(1)  # e.g. "nixos-26.05.1947.a0374025a863"
         # Strip the "nixos-" prefix for constructing URLs
@@ -219,7 +273,7 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
         # Extract the short version (e.g. "26.05") from the full version
         short_version_match = re.search(r"nixos-([\d]+\.[\d]+)", full_version)
         if not short_version_match:
-            return "", ""
+            return fail(f"could not parse short version from {full_version!r}")
         short_version = short_version_match.group(1)  # e.g. "26.05"
 
         variant = settings.get("variant", "minimal")  # "minimal" or "graphical"
@@ -248,10 +302,11 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
             with urllib.request.urlopen(req, timeout=MIRROR_HTTP_TIMEOUT) as resp:
                 if resp.status == 200:
                     return iso_filename, iso_url
-        except Exception:
-            pass
-
-        return "", ""
+            return fail(f"HEAD probe returned HTTP {resp.status} for {iso_url}")
+        except ValueError as e:
+            return fail(str(e))
+        except Exception as e:
+            return fail(f"HEAD probe failed for {iso_url}: {e}")
 
     # Strategy E: Pop!_OS JSON API — fetch latest build info
     elif strategy == "popos_api":
@@ -264,26 +319,32 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
         url = f"{api_url}/{release}/{variant}"
         html = fetch_html(url)
         if not html:
-            return "", ""
+            return fail(f"could not fetch {url}")
 
         try:
             data = _json.loads(html)
-            iso_url = data.get("url", "")
-            if iso_url:
-                iso_filename = _safe_filename(iso_url.rsplit("/", 1)[-1])
-                if not iso_filename:
-                    warn(f"{name} — API returned unsafe filename")
-                    return "", ""
-                checksum = data.get("sha256", "")
-                if isinstance(checksum, str) and re.fullmatch(
-                    r"[a-fA-F0-9]{64}", checksum
-                ):
-                    settings["resolved_checksum"] = checksum.lower()
-                return iso_filename, iso_url
-        except (_json.JSONDecodeError, KeyError):
+        except _json.JSONDecodeError:
             warn(f"{name} — could not parse Pop!_OS API response")
+            return fail(f"{url} did not return JSON")
 
-        return "", ""
+        iso_url = data.get("url", "") if isinstance(data, dict) else ""
+        if not iso_url:
+            return fail(f"{url} returned no ISO url")
+        iso_filename = _safe_filename(iso_url.rsplit("/", 1)[-1])
+        if not iso_filename:
+            warn(f"{name} — API returned unsafe filename")
+            return fail(f"{url} returned an unusable filename")
+        # Pop!_OS publishes the digest as "sha_sum"; older docs said "sha256".
+        checksum = ""
+        if isinstance(data, dict):
+            for key in ("sha256", "sha_sum"):
+                value = data.get(key, "")
+                if isinstance(value, str) and re.fullmatch(r"[a-fA-F0-9]{64}", value):
+                    checksum = value.lower()
+                    break
+        if checksum:
+            settings["resolved_checksum"] = checksum
+        return iso_filename, iso_url
 
     # Strategy F: Tails JSON API — fetch latest version from releases.json
     elif strategy == "tails_api":
@@ -296,40 +357,42 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
 
         html = fetch_html(api_url)
         if not html:
-            return "", ""
+            return fail(f"could not fetch {api_url}")
 
         try:
             data = _json.loads(html)
             installations = data.get("installations", [])
-            if not installations:
-                return "", ""
-
-            latest = installations[0]
-            for installation in installations:
-                if installation.get("version", "") > latest.get("version", ""):
-                    latest = installation
-
-            for path in latest.get("installation-paths", []):
-                if path.get("type") == file_type:
-                    for target in path.get("target-files", []):
-                        url = target.get("url", "")
-                        if url:
-                            iso_filename = _safe_filename(url.rsplit("/", 1)[-1])
-                            if not iso_filename:
-                                warn(f"{name} — API returned unsafe filename")
-                                return "", ""
-                            checksum = target.get("sha256", "")
-                            if isinstance(checksum, str) and re.fullmatch(
-                                r"[a-fA-F0-9]{64}", checksum
-                            ):
-                                settings["resolved_checksum"] = checksum.lower()
-                            return iso_filename, url
-        except (_json.JSONDecodeError, KeyError, IndexError):
+        except (_json.JSONDecodeError, AttributeError):
             warn(f"{name} — could not parse Tails API response")
+            return fail(f"{api_url} did not return the expected JSON")
+        if not installations:
+            return fail(f"{api_url} listed no installations")
 
-        return "", ""
+        latest = installations[0]
+        for installation in installations:
+            if installation.get("version", "") > latest.get("version", ""):
+                latest = installation
 
-    return "", ""
+        for path in latest.get("installation-paths", []):
+            if path.get("type") != file_type:
+                continue
+            for target in path.get("target-files", []):
+                url = target.get("url", "")
+                if not url:
+                    continue
+                iso_filename = _safe_filename(url.rsplit("/", 1)[-1])
+                if not iso_filename:
+                    warn(f"{name} — API returned unsafe filename")
+                    return fail(f"{api_url} returned an unusable filename")
+                checksum = target.get("sha256", "")
+                if isinstance(checksum, str) and re.fullmatch(
+                    r"[a-fA-F0-9]{64}", checksum
+                ):
+                    settings["resolved_checksum"] = checksum.lower()
+                return iso_filename, url
+        return fail(f"{api_url} has no {file_type} artifact for the latest release")
+
+    return fail(f"unknown or unhandled strategy {strategy!r}")
 
 
 MIN_CHUNK_SIZE = 4 * 1024 * 1024  # 4 MiB minimum per chunk
@@ -872,16 +935,23 @@ def _filename_variant_key(filename: str) -> str:
 
 def _check_distro(
     entry_id: str, settings: dict, ventoy_root: Path, force: bool = False
-) -> tuple[str, str, str, bool, str | None]:
-    """Scrape and version-check a single distro. Returns metadata for download decisions."""
+) -> DistroCheck:
+    """Scrape and version-check a single distro. Returns metadata for download decisions.
+
+    A mirror we could not read yields UNREACHABLE (never CURRENT), so callers can
+    report it and exit non-zero rather than pretending the distro is up to date.
+    """
     clean_name = settings.get("clean_name", entry_id)
     _debug(f"Checking {clean_name} (force={force})")
     spin_update(clean_name)
 
     latest_filename, download_url = process_scraping_strategy(clean_name, settings)
     if not latest_filename:
-        warn(f"{clean_name} — unable to reach mirror")
-        return entry_id, clean_name, "", False, None
+        # Terse here; the full reason is collected and tabulated by the caller.
+        warn(f"{clean_name} — unreachable (details below)")
+        return _unreachable(
+            entry_id, clean_name, str(settings.get("resolve_error") or "")
+        )
 
     local_ventoy_files = find_installed_isos(ventoy_root)
 
@@ -892,13 +962,16 @@ def _check_distro(
         f.name.lower() == latest_filename.lower() for f in local_ventoy_files
     ):
         success(f"{clean_name} is up to date")
-        return entry_id, clean_name, latest_filename, True, None
+        return DistroCheck(
+            entry_id, clean_name, latest_filename, SyncStatus.CURRENT, None
+        )
 
     # Version-based comparison: find best local candidate and compare
     remote_version = extract_version_from_filename(latest_filename)
     if not remote_version:
-        warn(f"{clean_name} — could not parse version from '{latest_filename}'")
-        return entry_id, clean_name, "", False, None
+        reason = f"no version in upstream filename {latest_filename!r}"
+        warn(f"{clean_name} — {reason}")
+        return _unreachable(entry_id, clean_name, reason)
 
     if not force:
         remote_key = _filename_variant_key(latest_filename)
@@ -921,12 +994,16 @@ def _check_distro(
                 success(
                     f"{clean_name} is up to date (local {local_version}, upstream {remote_version})"
                 )
-                return entry_id, clean_name, latest_filename, True, None
+                return DistroCheck(
+                    entry_id, clean_name, latest_filename, SyncStatus.CURRENT, None
+                )
 
     if force:
         warn(f"{clean_name} — force re-download")
 
-    return entry_id, clean_name, latest_filename, False, download_url
+    return DistroCheck(
+        entry_id, clean_name, latest_filename, SyncStatus.STALE, download_url
+    )
 
 
 def _copy_with_progress(src: Path, dst: Path, filename: str) -> None:
@@ -973,12 +1050,17 @@ def sync_all_configured_distros(
     drive_override: Path | None = None,
     use_buffer: bool = True,
     no_verify: bool = False,
-) -> tuple[Path | None, list[str]]:
+) -> tuple[Path | None, list[str], list[tuple[str, str]]]:
     """Iterate through user-defined scrapers to pull updates down safely.
 
     If *only* is provided, only sync those entry_ids.
     If *drive_override* is provided, use that as the Ventoy root.
     Set *use_buffer* to False to download directly to the Ventoy drive.
+
+    Returns ``(download_dir, downloaded_filenames, unreachable)`` where
+    *unreachable* is a list of ``(clean_name, reason)`` for every distro whose
+    upstream could not be read. This function never raises for a failed scrape;
+    the caller decides whether to exit non-zero.
     """
     _debug(
         f"sync_all_configured_distros(dry_run={dry_run}, force={force}, clean={clean}, only={only})"
@@ -986,10 +1068,11 @@ def sync_all_configured_distros(
     config = load_config(config_path)
     distro_scrapers = config.get("distros", {})
     iso_settings = config.get("iso", {})
+    unreachable: list[tuple[str, str]] = []
 
     if not distro_scrapers:
         error("No distribution definitions configured inside [distros] block.")
-        return None, []
+        return None, [], [("config.toml", "no [distros] block is defined")]
 
     if drive_override:
         ventoy_root = drive_override
@@ -997,7 +1080,7 @@ def sync_all_configured_distros(
         drives = find_ventoy_drives()
         if not drives:
             error("No Ventoy drives found.")
-            return None, []
+            return None, [], [("(drive)", "no Ventoy drives found")]
         ventoy_root = drives[0]
 
     visync_watchdog(ventoy_root)
@@ -1018,10 +1101,23 @@ def sync_all_configured_distros(
     pending_downloads: list[tuple[str, str, str]] = []
 
     if only:
+        configured = set(distro_scrapers)
+        unknown = sorted(set(only) - configured)
         distro_scrapers = {k: v for k, v in distro_scrapers.items() if k in only}
+        if unknown:
+            # Usually an entry_id left in installed.json by a removed distro.
+            warn(
+                "Installed but no longer configured: "
+                f"{', '.join(unknown)} — run 'visync search' for the current list"
+            )
+            unreachable.extend(
+                (eid, "no longer configured in config.toml") for eid in unknown
+            )
         if not distro_scrapers:
-            warn("None of the specified distros are configured.")
-            return None, []
+            if not unreachable:
+                warn("None of the specified distros are configured.")
+                unreachable.append(("(none)", "no requested distros are configured"))
+            return None, [], unreachable
 
     spin_start("Syncing ISOs...")
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=len(distro_scrapers))
@@ -1039,25 +1135,36 @@ def sync_all_configured_distros(
             if remaining <= 0:
                 for f in pending:
                     f.cancel()
-                    error(f"{future_map[f]} timed out")
+                    timed_out_id = future_map[f]
+                    error(f"{timed_out_id} timed out")
+                    unreachable.append(
+                        (timed_out_id, f"scrape exceeded {SCRAPE_DEADLINE}s deadline")
+                    )
                 break
             done, pending = concurrent.futures.wait(
                 pending, timeout=min(remaining, 0.5)
             )
             for future in done:
                 try:
-                    entry_id, _clean_name, latest_filename, up_to_date, download_url = (
-                        future.result()
-                    )
+                    check = future.result()
                 except (TimeoutError, ConnectionResetError, OSError) as e:
-                    error(f"{future_map[future]}: {e}")
+                    failed_id = future_map[future]
+                    error(f"{failed_id}: {e}")
+                    unreachable.append((failed_id, str(e)))
                     continue
                 except Exception as e:
-                    error(f"{future_map[future]}: {e}")
+                    failed_id = future_map[future]
+                    error(f"{failed_id}: {e}")
+                    unreachable.append((failed_id, f"{type(e).__name__}: {e}"))
                     continue
-                if up_to_date or not download_url:
+                if check.status is SyncStatus.UNREACHABLE:
+                    unreachable.append((check.clean_name, check.reason))
                     continue
-                pending_downloads.append((download_url, latest_filename, entry_id))
+                if check.status is not SyncStatus.STALE or not check.download_url:
+                    continue
+                pending_downloads.append(
+                    (check.download_url, check.latest_filename, check.entry_id)
+                )
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
         spin_stop()
@@ -1067,13 +1174,15 @@ def sync_all_configured_distros(
     downloaded: list[str] = []
 
     if dry_run:
-        if not pending_downloads:
-            info("All ISOs are current — nothing to download.")
-        else:
+        if pending_downloads:
             console.print()
             info(f"Would download {len(pending_downloads)} file(s):")
-            for url, filename, _ in pending_downloads:
+            for _url, filename, _ in pending_downloads:
                 console.print(f"    [cyan]→[/cyan] {_esc(filename)}")
+        elif unreachable:
+            info("Nothing to download — but some distros could not be checked.")
+        else:
+            info("All ISOs are current — nothing to download.")
     else:
         for download_url, latest_filename, entry_id in pending_downloads:
             dest = download_target_dir / latest_filename
@@ -1091,13 +1200,16 @@ def sync_all_configured_distros(
             except ValueError as e:
                 error(f"Skipping {latest_filename}: {e}")
                 part_file.unlink(missing_ok=True)
+                unreachable.append((latest_filename, f"rejected: {e}"))
                 continue
             except (TimeoutError, ConnectionResetError, OSError) as e:
                 error(f"Failed syncing {latest_filename}: {e}")
                 part_file.unlink(missing_ok=True)
+                unreachable.append((latest_filename, f"download failed: {e}"))
                 continue
             if not ok:
                 part_file.unlink(missing_ok=True)
+                unreachable.append((latest_filename, "download or verification failed"))
                 continue
             downloaded.append(latest_filename)
             if dest.parent != ventoy_root:
@@ -1115,6 +1227,9 @@ def sync_all_configured_distros(
                                 f"source {dest.stat().st_size}, dest {drive_dest.stat().st_size}"
                             )
                             drive_dest.unlink(missing_ok=True)
+                            unreachable.append(
+                                (latest_filename, "copy to drive failed size check")
+                            )
                             continue
                         success(f"Copied to Ventoy drive: {latest_filename}")
                 except OSError as e:
@@ -1130,6 +1245,9 @@ def sync_all_configured_distros(
                             warn(
                                 f"Could not remove partial file {drive_dest}: {unlink_err}"
                             )
+                    unreachable.append(
+                        (latest_filename, f"could not place on drive: {e}")
+                    )
                     continue
                 try:
                     dest.unlink(missing_ok=True)
@@ -1137,7 +1255,7 @@ def sync_all_configured_distros(
                     warn(f"Could not remove staging copy {dest.name}: {e}")
                 _cleanup_old_versions(drive_dest, ventoy_root)
 
-    return download_target_dir, downloaded
+    return download_target_dir, downloaded, unreachable
 
 
 if __name__ == "__main__":

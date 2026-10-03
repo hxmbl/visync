@@ -18,6 +18,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src import download as dl
 from src.download import (
+    DistroCheck,
+    SyncStatus,
     _download_chunked,
     _download_threads,
     _safe_filename,
@@ -61,17 +63,16 @@ class TestDryRunGatesClean(unittest.TestCase):
             "distros": {"ArchLinux": {"clean_name": "Arch Linux"}},
         }
 
+    def _current(self, filename: str) -> DistroCheck:
+        return DistroCheck(
+            "ArchLinux", "Arch Linux", filename, SyncStatus.CURRENT, None
+        )
+
     @patch("src.download.visync_watchdog")
     @patch("src.download._check_distro")
     def test_sync_clean_dry_run_deletes_nothing(self, mock_check, _wd):
         """--clean --dry-run reports but keeps both ISOs on disk."""
-        mock_check.return_value = (
-            "ArchLinux",
-            "Arch Linux",
-            "archlinux-2026.08.01-x86_64.iso",
-            True,
-            None,
-        )
+        mock_check.return_value = self._current("archlinux-2026.08.01-x86_64.iso")
         with tempfile.TemporaryDirectory() as tmpdir:
             drive = self._make_drive(tmpdir)
             with patch("src.download.load_config", return_value=self._config()):
@@ -89,13 +90,7 @@ class TestDryRunGatesClean(unittest.TestCase):
     @patch("src.download._check_distro")
     def test_sync_clean_without_dry_run_removes_old(self, mock_check, _wd):
         """--clean (no dry-run) removes only the older version."""
-        mock_check.return_value = (
-            "ArchLinux",
-            "Arch Linux",
-            "archlinux-2026.08.01-x86_64.iso",
-            True,
-            None,
-        )
+        mock_check.return_value = self._current("archlinux-2026.08.01-x86_64.iso")
         with tempfile.TemporaryDirectory() as tmpdir:
             drive = self._make_drive(tmpdir)
             with patch("src.download.load_config", return_value=self._config()):
@@ -125,11 +120,11 @@ class TestDryRunGatesClean(unittest.TestCase):
     @patch("src.download._check_distro")
     def test_sync_dry_run_creates_no_staging_dir(self, mock_check, _wd):
         """--dry-run must not create the staging cache directory."""
-        mock_check.return_value = (
+        mock_check.return_value = DistroCheck(
             "ArchLinux",
             "Arch Linux",
             "archlinux-2026.08.01-x86_64.iso",
-            False,
+            SyncStatus.STALE,
             "https://m/x.iso",
         )
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -529,7 +524,7 @@ class TestScrapeDeadline(unittest.TestCase):
 
         def hung_check(*a, **k):
             release.wait(10)
-            return ("X", "X", "", True, None)
+            return DistroCheck("X", "X", "", SyncStatus.CURRENT, None)
 
         config = {"iso": {}, "distros": {"X": {"clean_name": "X"}}}
         orig_deadline = dl.SCRAPE_DEADLINE

@@ -16,7 +16,15 @@ from src.finder import (
     load_all_metadata,
     load_config,
 )
-from src.output import console, error, header, iso_table, success, warn
+from src.output import (
+    console,
+    error,
+    failure_table,
+    header,
+    iso_table,
+    success,
+    warn,
+)
 from src.output import info as output_info
 from src.verify import extract_version_from_filename, run_directory_verify
 
@@ -88,6 +96,41 @@ def _get_drives(drives: list[Path] | None = None) -> list[Path]:
             )
 
 
+def _sync_one_drive(
+    drive: Path,
+    only: list[str] | None,
+    config: Path | None,
+    dry_run: bool = False,
+    force: bool = False,
+    clean: bool = False,
+    no_verify: bool = False,
+    use_buffer: bool = True,
+) -> list[tuple[str, str]]:
+    """Run the sync pipeline for one drive and report what could not be checked.
+
+    Returns the list of ``(clean_name, reason)`` failures so the caller can finish
+    its own bookkeeping before deciding on an exit code. The failure block is
+    printed here so install/update/sync all surface it identically.
+    """
+    from src.download import sync_all_configured_distros
+
+    _dir, _downloaded, failures = sync_all_configured_distros(
+        dry_run=dry_run,
+        force=force,
+        clean=clean,
+        config_path=config,
+        only=only,
+        drive_override=drive,
+        use_buffer=use_buffer,
+        no_verify=no_verify,
+    )
+    if failures:
+        console.print()
+        error(f"Sync finished with {len(failures)} problem(s):")
+        failure_table(failures)
+    return failures
+
+
 @app.command()
 def install(
     name: str | None = typer.Argument(
@@ -122,7 +165,6 @@ def install(
 
     Use a distro name directly, or pass a file with one name per line.
     """
-    from src.download import sync_all_configured_distros
     from src.pm import mark_installed, matching_distros, resolve_distro
 
     config_data = load_config(config)
@@ -194,6 +236,7 @@ def install(
         existing = find_installed_isos(ventoy_root)
         already_on_drive: list[str] = []
         to_download: list[str] = []
+        failures: list[tuple[str, str]] = []
 
         for entry_id, clean_name in to_install:
             found = False
@@ -205,7 +248,12 @@ def install(
                     distro = identify_distro("", iso_path.name)
                 if distro.lower() == clean_name.lower():
                     warn(f"{clean_name} is already on the drive: {iso_path.name}")
-                    mark_installed(ventoy_root, entry_id)
+                    if not dry_run:
+                        mark_installed(
+                            ventoy_root,
+                            entry_id,
+                            version=extract_version_from_filename(iso_path.name) or "",
+                        )
                     already_on_drive.append(entry_id)
                     found = True
                     break
@@ -226,13 +274,15 @@ def install(
             continue
 
         output_info(f"Installing {len(to_download)} distro(s)...")
-        sync_all_configured_distros(
-            force=True,
-            config_path=config,
-            only=to_download,
-            drive_override=ventoy_root,
-            use_buffer=use_buffer,
-            no_verify=no_verify,
+        failures.extend(
+            _sync_one_drive(
+                drive=ventoy_root,
+                only=to_download,
+                config=config,
+                force=True,
+                use_buffer=use_buffer,
+                no_verify=no_verify,
+            )
         )
 
         # Mark installed if file is now on drive
@@ -253,6 +303,9 @@ def install(
                     break
             else:
                 warn(f"{clean_name} — file not found on drive after download")
+
+        if failures:
+            raise typer.Exit(1)
 
 
 @app.command()
@@ -379,13 +432,14 @@ def update(
     ),
 ) -> None:
     """Update installed distros to latest versions."""
-    from src.download import sync_all_configured_distros
     from src.pm import get_installed_ids, resolve_distro
     from src.pm import mark_installed as _mark_installed
     from src.verify import extract_version_from_filename as _extract_ver
 
     config_data = load_config(config)
     target_drives = _get_drives(_parse_drives(drive))
+
+    failures: list[tuple[str, str]] = []
 
     for ventoy_root in target_drives:
         if len(target_drives) > 1:
@@ -420,15 +474,17 @@ def update(
                 output_info("No distros installed. Use 'visync install <name>' first.")
                 continue
 
-        sync_all_configured_distros(
-            dry_run=dry_run,
-            force=force,
-            clean=clean,
-            config_path=config,
-            only=only,
-            drive_override=ventoy_root,
-            no_verify=no_verify,
-            use_buffer=not no_staging,
+        failures.extend(
+            _sync_one_drive(
+                drive=ventoy_root,
+                only=only,
+                config=config,
+                dry_run=dry_run,
+                force=force,
+                clean=clean,
+                no_verify=no_verify,
+                use_buffer=not no_staging,
+            )
         )
 
         if not dry_run:
@@ -447,6 +503,9 @@ def update(
                         version = _extract_ver(iso_path.name) or ""
                         _mark_installed(ventoy_root, eid, version=version)
                         break
+
+    if failures:
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -766,10 +825,11 @@ def sync(
     ),
 ) -> None:
     """Sync installed distros to the Ventoy drive."""
-    from src.download import sync_all_configured_distros
     from src.pm import get_installed_ids
 
     target_drives = _get_drives(_parse_drives(drive))
+
+    failures: list[tuple[str, str]] = []
 
     for drive_root in target_drives:
         if len(target_drives) > 1:
@@ -786,16 +846,21 @@ def sync(
                 )
                 continue
 
-        sync_all_configured_distros(
-            dry_run=dry_run,
-            force=force,
-            clean=clean,
-            config_path=config,
-            only=only,
-            drive_override=drive_root,
-            no_verify=no_verify,
-            use_buffer=not no_staging,
+        failures.extend(
+            _sync_one_drive(
+                drive=drive_root,
+                only=only,
+                config=config,
+                dry_run=dry_run,
+                force=force,
+                clean=clean,
+                no_verify=no_verify,
+                use_buffer=not no_staging,
+            )
         )
+
+    if failures:
+        raise typer.Exit(1)
 
 
 @app.command()
