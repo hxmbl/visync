@@ -1050,12 +1050,16 @@ def sync_all_configured_distros(
     drive_override: Path | None = None,
     use_buffer: bool = True,
     no_verify: bool = False,
+    reset_visync: bool = False,
 ) -> tuple[Path | None, list[str], list[tuple[str, str]]]:
     """Iterate through user-defined scrapers to pull updates down safely.
 
     If *only* is provided, only sync those entry_ids.
     If *drive_override* is provided, use that as the Ventoy root.
     Set *use_buffer* to False to download directly to the Ventoy drive.
+    Set *reset_visync* to allow the watchdog to wipe an over-budget .visync/;
+    without it the watchdog only deep-cleans. The watchdog never runs on a
+    dry run, which must not modify the drive at all.
 
     Returns ``(download_dir, downloaded_filenames, unreachable)`` where
     *unreachable* is a list of ``(clean_name, reason)`` for every distro whose
@@ -1083,7 +1087,10 @@ def sync_all_configured_distros(
             return None, [], [("(drive)", "no Ventoy drives found")]
         ventoy_root = drives[0]
 
-    visync_watchdog(ventoy_root)
+    # The watchdog deep-cleans and can wipe .visync/, so it must never run on a
+    # dry run — that command promises to leave the drive untouched.
+    if not dry_run:
+        visync_watchdog(ventoy_root, allow_wipe=reset_visync)
     _sweep_old_versions(ventoy_root, clean=clean and not dry_run)
 
     config_download_dir = iso_settings.get("download_dir", "").strip()

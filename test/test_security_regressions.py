@@ -26,7 +26,7 @@ from src.download import (
     _sweep_old_versions,
     sync_all_configured_distros,
 )
-from src.finder import keyword_hit
+from src.finder import _dir_size, keyword_hit
 from src.output import console, error, info, removed, success, warn
 from src.pm import load_installed
 from src.verify import ChecksumUnavailable
@@ -893,20 +893,114 @@ class TestWatchdogSkipsNonJson(unittest.TestCase):
             self.assertFalse(orphan.exists(), "orphaned json should be cleaned")
             self.assertTrue(stray.exists(), "non-json must never be deleted")
 
-    def test_watchdog_over_limit_wipes_but_only_visync(self):
-        """Stage-2 wipe removes .visync contents but nothing outside it."""
+    def _over_budget_drive(self, tmp: str) -> tuple[Path, Path]:
+        """Build a drive whose .visync/ exceeds the ceiling via un-wipeable ballast.
+
+        A non-.json ballast file is used deliberately: it survives stage 1's deep
+        clean, which is what forces the stage-2 decision.
+        """
+        from src.finder import VISYNC_SIZE_LIMIT
+
+        drive = Path(tmp)
+        visync_dir = drive / ".visync"
+        (visync_dir / "metadata").mkdir(parents=True)
+        (visync_dir / "metadata" / "gone.iso.json").write_text("{}")
+        (visync_dir / "ballast.bin").write_bytes(b"\0" * (VISYNC_SIZE_LIMIT + 1))
+        keeper = drive / "archlinux-2026.iso"
+        keeper.write_bytes(b"\x00" * 64)
+        return drive, keeper
+
+    def test_watchdog_default_does_not_wipe(self):
+        """Over budget without --reset-visync must NOT destroy .visync/ (C4)."""
+        from src.finder import visync_watchdog
+
+        with tempfile.TemporaryDirectory() as tmp:
+            drive, keeper = self._over_budget_drive(tmp)
+            visync_dir = drive / ".visync"
+
+            visync_watchdog(drive)
+
+            self.assertTrue(visync_dir.exists(), "wipe must be opt-in")
+            self.assertTrue(keeper.exists(), "drive content outside .visync untouched")
+
+    def test_watchdog_wipes_only_when_opted_in(self):
+        """allow_wipe=True removes .visync contents but nothing outside it."""
+        from src.finder import visync_watchdog
+
+        with tempfile.TemporaryDirectory() as tmp:
+            drive, keeper = self._over_budget_drive(tmp)
+            visync_dir = drive / ".visync"
+
+            visync_watchdog(drive, allow_wipe=True)
+
+            self.assertFalse(visync_dir.exists(), "opted-in wipe must remove .visync")
+            self.assertTrue(keeper.exists(), "drive content outside .visync untouched")
+
+    def test_dry_run_sync_never_runs_the_watchdog(self):
+        """--dry-run must leave .visync/ (and installed.json) byte-for-byte intact."""
+        from src.download import sync_all_configured_distros
+        from src.finder import VISYNC_SIZE_LIMIT
+
+        with tempfile.TemporaryDirectory() as tmp:
+            drive, _keeper = self._over_budget_drive(tmp)
+            visync_dir = drive / ".visync"
+            installed = visync_dir / "installed.json"
+            installed.write_text('{"ArchLinux": {"version": "2026.01.01"}}')
+            cfg = {
+                "iso": {},
+                "checksums": {"enabled": False},
+                "distros": {"ArchLinux": {"clean_name": "Arch Linux"}},
+            }
+
+            with (
+                patch("src.download.load_config", return_value=cfg),
+                patch("src.download._sweep_old_versions"),
+                patch("src.download._check_distro") as check,
+            ):
+                check.return_value = DistroCheck(
+                    "ArchLinux", "Arch Linux", "a.iso", SyncStatus.CURRENT, None
+                )
+                sync_all_configured_distros(
+                    dry_run=True,
+                    only=["ArchLinux"],
+                    drive_override=drive,
+                    use_buffer=False,
+                    reset_visync=True,  # even asked for, dry-run must not wipe
+                )
+
+            self.assertTrue(visync_dir.exists(), "dry-run must not delete .visync")
+            self.assertTrue(
+                installed.exists(), "dry-run must not delete installed.json"
+            )
+            self.assertEqual(
+                (visync_dir / "metadata" / "gone.iso.json").exists(),
+                True,
+                "dry-run must not even deep-clean orphaned metadata",
+            )
+            self.assertTrue(
+                (visync_dir / "ballast.bin").stat().st_size > VISYNC_SIZE_LIMIT,
+                "ballast must be untouched",
+            )
+
+    def test_watchdog_deep_cleans_orphans_without_opting_in(self):
+        """Stage 1 still runs unattended and reclaims orphaned metadata."""
         from src.finder import VISYNC_SIZE_LIMIT, visync_watchdog
 
         with tempfile.TemporaryDirectory() as tmp:
             drive = Path(tmp)
             visync_dir = drive / ".visync"
             (visync_dir / "metadata").mkdir(parents=True)
-            (visync_dir / "metadata" / "gone.iso.json").write_text("{}")
-            keeper = drive / "archlinux-2026.iso"
-            keeper.write_bytes(b"\x00" * 64)
-            (visync_dir / "ballast.bin").write_bytes(b"\0" * (VISYNC_SIZE_LIMIT + 1))
+            orphan = visync_dir / "metadata" / "gone.iso.json"
+            orphan.write_text('{"variant_stem": "x", "version": "1"}')
+            # Padding that pushes us over the ceiling but is itself removable.
+            for i in range(12):
+                (visync_dir / f"pad{i}.json").write_text(
+                    '{"variant_stem": "x", "version": "1"}'
+                )
+            assert _dir_size(visync_dir) < VISYNC_SIZE_LIMIT
 
-            visync_watchdog(drive)
+            with patch("src.finder.VISYNC_SIZE_LIMIT", 1):
+                visync_watchdog(drive)
 
-            self.assertFalse(visync_dir.exists(), "over-budget .visync gets wiped")
-            self.assertTrue(keeper.exists(), "drive content outside .visync untouched")
+            self.assertFalse(orphan.exists(), "orphaned metadata must be deep-cleaned")
+            self.assertTrue(visync_dir.exists(), "deep clean must not wipe the dir")

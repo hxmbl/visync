@@ -322,9 +322,26 @@ class TestVisyncWatchdog(unittest.TestCase):
                 return VISYNC_SIZE_LIMIT + 1
 
             with patch("src.finder._dir_size", side_effect=fake_size):
-                visync_watchdog(drive)
+                visync_watchdog(drive, allow_wipe=True)
             self.assertFalse((drive / ".visync").exists())
-            _ok("Full wipe executed")
+            _ok("Full wipe executed when opted in")
+
+    def test_no_wipe_without_opt_in(self):
+        _section("watchdog: Over Budget Does Not Wipe By Default")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            drive = Path(tmpdir)
+            ensure_visync_dir(drive)
+
+            def fake_size(p):
+                return VISYNC_SIZE_LIMIT + 1
+
+            with patch("src.finder._dir_size", side_effect=fake_size):
+                visync_watchdog(drive)  # no allow_wipe
+            self.assertTrue(
+                (drive / ".visync").exists(),
+                "over-budget .visync must survive unless --reset-visync",
+            )
+            _ok("Default path preserves .visync/ and only warns")
 
     def test_no_error_when_missing_during_wipe(self):
         _section("watchdog: Graceful on Concurrent Deletion")
@@ -541,7 +558,7 @@ class TestWatchdogGuardrails(unittest.TestCase):
                 return VISYNC_SIZE_LIMIT + 1 if call_count[0] <= 2 else 100
 
             with patch("src.finder._dir_size", side_effect=fake_size):
-                visync_watchdog(drive)
+                visync_watchdog(drive, allow_wipe=True)
             self.assertFalse((drive / ".visync").exists())
             _ok("Full wipe succeeded with valid .visync path")
 

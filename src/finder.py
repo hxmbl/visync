@@ -505,16 +505,26 @@ def _dir_size(path: Path) -> int:
     return total
 
 
-def visync_watchdog(drive_root: Path) -> None:
-    """Enforce a 1 GiB ceiling on .visync/.
+def visync_watchdog(drive_root: Path, *, allow_wipe: bool = False) -> None:
+    """Keep .visync/ under its size ceiling.
 
-    If the directory exceeds the limit:
-    1. Deep clean — delete metadata files whose ISO no longer exists on the drive.
-    2. If still over budget — wipe the entire .visync/ directory.
+    Stage 1 — deep clean (always): delete metadata whose ISO no longer exists on
+    the drive. This only removes ``.json`` orphans and is self-healing, so it
+    runs unattended.
 
-    SAFETY: Before any rmtree call, the target path is validated to be
-    exactly '.visync' and not the drive root. A ValueError is raised
-    immediately if the path doesn't match.
+    Stage 2 — full wipe (opt-in, ``allow_wipe=True``): rmtree the directory.
+
+    Why stage 2 is opt-in: legitimate .visync/ state is installed.json plus one
+    ~236-byte manifest per ISO. Even a thousand ISOs is ~230 KiB against a
+    1 GiB ceiling, so being over budget is *never* legitimate and a wipe can
+    never repair a real problem — it can only destroy installed.json and every
+    registration. The realistic way to get here is a misconfigured
+    ``[iso] download_dir`` pointing under .visync/, which stages multi-GB ISOs
+    inside the directory. So by default we deep clean and then tell the user
+    exactly how to reclaim the space.
+
+    SAFETY: before any rmtree the target is validated to be exactly '.visync'
+    and not the drive root; a ValueError propagates immediately.
     """
     try:
         visync_dir = drive_root / _WATCHDOG_DIR_NAME
@@ -537,11 +547,25 @@ def visync_watchdog(drive_root: Path) -> None:
             )
             return
 
+        if not allow_wipe:
+            console.print(
+                f"  [yellow]⚠[/yellow] Watchdog: .visync/ is still {size_after / (1024**2):.1f} MiB after deep clean."
+            )
+            console.print(
+                "  [dim]Not wiping automatically — this destroys installed.json and every"
+                " registration.[/dim]"
+            )
+            console.print(
+                "  [dim]Re-run with --reset-visync to wipe .visync/, or point"
+                f" {_escape('[iso]')} download_dir outside .visync/.[/dim]"
+            )
+            return
+
         # GUARDRAIL: Validate target before any recursive deletion
         _guard_visync_path(visync_dir)
 
         console.print(
-            f"  [yellow]⚠[/yellow] Watchdog: .visync/ still {size_after / (1024**2):.1f} MiB after deep clean. Wiping entirely."
+            f"  [yellow]⚠[/yellow] Watchdog: wiping .visync/ ({size_after / (1024**2):.1f} MiB) as requested."
         )
         import shutil
 

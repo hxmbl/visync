@@ -60,6 +60,7 @@ visync verify
 | `visync sync` [--no-staging] | Sync installed distros to latest |
 | `visync sync --all` [--no-staging] | Sync all configured distros |
 | `visync sync --clean` [--no-staging] | Remove old versions of same distro |
+| `visync sync --reset-visync` | Allow the watchdog to wipe an over-budget `.visync/` |
 | `visync list` | List ISOs on the drive |
 | `visync autodetect` | Register existing ISOs as installed |
 | `visync verify` | Verify checksums against upstream |
@@ -108,7 +109,7 @@ Config resolution order: explicit `--config` path, then `$VISYNC_CONFIG`, then `
 ## How it works
 
 1. **Detect** — finds mounted Ventoy drives on Windows, macOS, or Linux (with udisksctl automount)
-2. **Scrape** — concurrent mirror scraping with TCP pre-flight checks and watchdog timeouts
+2. **Scrape** — concurrent mirror scraping with TCP pre-flight checks and watchdog timeouts. A distro whose mirror can't be read is reported with the reason and makes the command exit non-zero; it is never silently counted as up to date
 3. **Compare** — version-aware comparison (semantic or date-based) against local ISOs
 4. **Download** — streaming downloads with staging buffer (less drive wear), falls back to direct if staging full. Use `--no-staging` / `--no-buffer` to skip the staging buffer and download directly to the Ventoy drive.
 5. **Verify** — optional checksum verification against published hashes
@@ -117,11 +118,12 @@ Config resolution order: explicit `--config` path, then `$VISYNC_CONFIG`, then `
 
 ## Safety
 
-- `--clean` is dry-run by default, and `--dry-run` is always honored — `sync --clean --dry-run` never deletes
+- `--clean` is dry-run by default, and `--dry-run` never modifies the drive — `sync --clean --dry-run` deletes nothing and does not touch `.visync/`
 - `remove` and `nuke-metadata` show exactly what will be deleted and ask for confirmation (`--yes` skips)
 - Ambiguous distro queries are refused with candidate lists instead of acting on an arbitrary match
 - Distro matching uses whole-token keywords (`pop` does not match `popcorn.iso`)
-- `.visync/` watchdog enforces a 1 GiB ceiling (deep clean orphaned metadata, then wipe)
+- `.visync/` watchdog enforces a 1 GiB ceiling by deep-cleaning orphaned metadata. Wiping `.visync/` entirely is **opt-in** via `sync --reset-visync`, because it destroys `installed.json` and every registration
+- The watchdog never runs on `--dry-run`
 - Guardrails prevent deletion of `.iso` or `.img` files under any circumstance — including inside `.visync/metadata`
 - Downloads use parallel range requests with per-chunk HTTP 206 and byte-count validation; truncated or range-ignoring servers fail loudly instead of producing silent corruption
 - Checksum mismatch deletes the download; an *unreachable* checksum source keeps the file and warns (`UNVERIFIED`)

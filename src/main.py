@@ -105,6 +105,7 @@ def _sync_one_drive(
     clean: bool = False,
     no_verify: bool = False,
     use_buffer: bool = True,
+    reset_visync: bool = False,
 ) -> list[tuple[str, str]]:
     """Run the sync pipeline for one drive and report what could not be checked.
 
@@ -123,6 +124,7 @@ def _sync_one_drive(
         drive_override=drive,
         use_buffer=use_buffer,
         no_verify=no_verify,
+        reset_visync=reset_visync,
     )
     if failures:
         console.print()
@@ -430,6 +432,12 @@ def update(
         "--no-buffer",
         help="Download directly to the Ventoy drive (skip staging buffer)",
     ),
+    reset_visync: bool = typer.Option(
+        False,
+        "--reset-visync",
+        help="Allow the watchdog to wipe .visync/ if it exceeds 1 GiB "
+        "(destroys installed.json; metadata rebuilds on next sync)",
+    ),
 ) -> None:
     """Update installed distros to latest versions."""
     from src.pm import get_installed_ids, resolve_distro
@@ -484,6 +492,7 @@ def update(
                 clean=clean,
                 no_verify=no_verify,
                 use_buffer=not no_staging,
+                reset_visync=reset_visync,
             )
         )
 
@@ -823,6 +832,12 @@ def sync(
         "--no-buffer",
         help="Download directly to the Ventoy drive (skip staging buffer)",
     ),
+    reset_visync: bool = typer.Option(
+        False,
+        "--reset-visync",
+        help="Allow the watchdog to wipe .visync/ if it exceeds 1 GiB "
+        "(destroys installed.json; metadata rebuilds on next sync)",
+    ),
 ) -> None:
     """Sync installed distros to the Ventoy drive."""
     from src.pm import get_installed_ids
@@ -856,6 +871,7 @@ def sync(
                 clean=clean,
                 no_verify=no_verify,
                 use_buffer=not no_staging,
+                reset_visync=reset_visync,
             )
         )
 
