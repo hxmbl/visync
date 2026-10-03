@@ -41,7 +41,7 @@ def _make_iso(drive: Path, name: str, size: int = 1024) -> Path:
 def _write_installed(drive: Path, data: dict) -> None:
     """Write installed.json to the drive."""
     path = drive / ".visync" / "installed.json"
-    with open(path, "w") as f:
+    with path.open("w") as f:
         json.dump(data, f)
 
 

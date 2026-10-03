@@ -6,6 +6,7 @@ from the file header, maps IDs to friendly distro names, and discovers
 .iso files under a directory.
 """
 
+import contextlib
 import json
 import os
 import re
@@ -97,7 +98,7 @@ def load_config(config_path: Path | None = None) -> dict:
             console.print("  [dim]Set VISYNC_CONFIG or pass --config.[/dim]")
             return {}
     try:
-        with open(config_path, "rb") as f:
+        with config_path.open("rb") as f:
             data = tomllib.load(f)
     except FileNotFoundError as e:
         console.print(f"  [red]✗[/red] Config not found: {_escape(str(e))}")
@@ -313,7 +314,7 @@ def find_ventoy_drives() -> list[Path]:
 def get_iso_volume_id(iso_path: Path) -> str:
     """Read the unchangeable internal Volume Identifier of an ISO file."""
     try:
-        with open(iso_path, "rb") as f:
+        with iso_path.open("rb") as f:
             # Skip directly to the ISO 9660 primary descriptor header
             f.seek(32808)
             volume_id = f.read(32)
@@ -412,10 +413,7 @@ def identify_distro(volume_id: str, file_name: str) -> str:
 
     name_match = re.match(r"^([a-zA-Z_\-]+?)(?:[-_]v?\d|\.)", file_name)
     if name_match:
-        extracted_name = (
-            name_match.group(1).replace("-", " ").replace("_", " ").title().strip()
-        )
-        return extracted_name
+        return name_match.group(1).replace("-", " ").replace("_", " ").title().strip()
 
     return "Unknown OS"
 
@@ -447,7 +445,7 @@ def read_iso_metadata(drive_root: Path, filename: str) -> dict | None:
     metadata_dir = drive_root / ".visync" / "metadata"
     meta_file = metadata_dir / f"{filename}.json"
     try:
-        with open(meta_file) as f:
+        with meta_file.open() as f:
             data = json.load(f)
     except (json.JSONDecodeError, OSError):
         return None
@@ -479,9 +477,9 @@ def write_iso_metadata(
     }
     try:
         tmp_file = meta_file.with_suffix(".json.tmp")
-        with open(tmp_file, "w") as f:
+        with tmp_file.open("w") as f:
             json.dump(manifest, f, indent=2)
-        os.replace(tmp_file, meta_file)
+        tmp_file.replace(meta_file)
     except OSError as e:
         console.print(
             f"  [yellow]⚠[/yellow] Could not write metadata for {_escape(filename)}: {_escape(str(e))}"
@@ -492,10 +490,10 @@ def remove_iso_metadata(drive_root: Path, filename: str) -> None:
     """Delete the metadata file for a given ISO (called when an ISO is removed)."""
     metadata_dir = drive_root / ".visync" / "metadata"
     meta_file = metadata_dir / f"{filename}.json"
-    try:
+    # The caller treats a failed delete as "metadata stays behind"; the watchdog
+    # will retry. Only OSError is swallowed, as before.
+    with contextlib.suppress(OSError):
         meta_file.unlink(missing_ok=True)
-    except OSError:
-        pass
 
 
 def load_all_metadata(drive_root: Path) -> dict[str, dict]:
@@ -514,25 +512,15 @@ def load_all_metadata(drive_root: Path) -> dict[str, dict]:
     return result
 
 
-def find_installed_isos_formatted(directory: Path) -> list[str]:
-    """Find all ISOs and return their verified distribution names."""
-    detected_names = []
-
-    for iso_path in find_installed_isos(directory):
-        # Read the internal header label instead of trusting the filename
-        volume_id = get_iso_volume_id(iso_path)
-        distro = identify_distro(volume_id, iso_path.name)
-        detected_names.append(distro)
-
-    return detected_names
-
-
 # ── .visync watchdog ─────────────────────────────────────────────
 
 VISYNC_SIZE_LIMIT = 1_073_741_824  # 1 GiB
 _WATCHDOG_DIR_NAME = ".visync"
-_WATCHDOG_ALLOWED_EXTENSIONS = {".json"}  # Only these may be deleted by unlink
-_WATCHDOG_BLOCKED_EXTENSIONS = {".iso", ".img"}  # Hard-blocked from deletion
+# An allowlist, not a blocklist of ".iso"/".img": every deletion the watchdog can
+# perform is checked against this, so anything not listed here is refused. That
+# covers .iso and .img without naming them, and also covers a future file type
+# nobody thought to block.
+_WATCHDOG_ALLOWED_EXTENSIONS = {".json"}
 
 
 def _guard_json_only(path: Path) -> None:

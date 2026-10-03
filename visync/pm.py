@@ -5,7 +5,6 @@ State file: .visync/installed.json
 """
 
 import json
-import os
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -27,7 +26,7 @@ def load_installed(drive_root: Path) -> dict:
     if not path.exists():
         return {}
     try:
-        with open(path) as f:
+        with path.open() as f:
             data = json.load(f)
     except (json.JSONDecodeError, OSError):
         return {}
@@ -42,9 +41,9 @@ def save_installed(drive_root: Path, installed: dict) -> None:
     path = _state_path(drive_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(".json.tmp")
-    with open(tmp_path, "w") as f:
+    with tmp_path.open("w") as f:
         json.dump(installed, f, indent=2)
-    os.replace(tmp_path, path)
+    tmp_path.replace(path)
 
 
 def mark_installed(drive_root: Path, entry_id: str, version: str = "") -> None:

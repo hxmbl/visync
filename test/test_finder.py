@@ -1,5 +1,6 @@
 """Integration tests for finder module (requires Ventoy hardware for some tests)."""
 
+import contextlib
 import sys
 import tempfile
 import unittest
@@ -9,14 +10,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from visync.finder import (
     find_installed_isos,
-    find_installed_isos_formatted,
     find_ventoy_drives,
     get_iso_volume_id,
+    identify_distro,
 )
 
 
 def _detect_ventoy() -> tuple[bool, list[Path]]:
-    """Check for Ventoy drive using a lightweight label probe, then full detection."""
+    """Check for Ventoy drive using a lightweight label probe, then full detection.
+
+    Every step is best-effort: a machine without blkid, without mount privileges,
+    or with no Ventoy stick must still get a usable answer, never an exception out
+    of module import time.
+    """
     found = False
     drives: list[Path] = []
     try:
@@ -31,10 +37,10 @@ def _detect_ventoy() -> tuple[bool, list[Path]]:
     except Exception:
         pass
     if found:
-        try:
+        # drives is already [], so a detection failure leaves the caller with an
+        # empty list rather than an unbound name.
+        with contextlib.suppress(Exception):
             drives = find_ventoy_drives()
-        except Exception:
-            pass
     return found, drives
 
 
@@ -113,20 +119,6 @@ class TestInstalledIsos(unittest.TestCase):
             if isos:
                 _ok(f"All {len(isos)} ISO(s) are valid Path objects")
 
-    def test_formatted_names(self) -> None:
-        if not HAS_VENTOY:
-            raise unittest.SkipTest("No Ventoy drive available")
-
-        _section("Formatted Distribution Names")
-        for drive in _ventoy_drives:
-            names = find_installed_isos_formatted(drive)
-            _info(f"Identified {len(names)} distribution(s)")
-            for name in names:
-                print(f"       - {name}")
-            self.assertIsInstance(names, list)
-            if names:
-                _ok(f"All {len(names)} name(s) resolved")
-
     def test_volume_id_on_ventoy_isos(self) -> None:
         if not HAS_VENTOY:
             raise unittest.SkipTest("No Ventoy drive available")
@@ -194,13 +186,21 @@ class TestFindInstalledIsos(unittest.TestCase):
             self.assertEqual(len(isos), 3)
             _ok(f"Found {len(isos)} ISO(s) (recursive)")
 
-    def test_formatted_version(self) -> None:
-        _section("Formatted Name Discovery")
+    def test_volume_id_resolves_the_distro_name(self) -> None:
+        """A fake ISO's volume ID must resolve to its distro name.
+
+        This is what the CLI does for every row it prints: read the internal
+        label, hand it to identify_distro. Asserted through the live path rather
+        than through a helper that only existed to package the two steps.
+        """
+        _section("Volume ID -> Distro Name")
         with tempfile.TemporaryDirectory() as tmpdir:
-            _make_fake_iso(Path(tmpdir), "UBUNTU_24_04")
-            names = find_installed_isos_formatted(Path(tmpdir))
-            self.assertEqual(names, ["Ubuntu"])
-            _ok(f"Resolved name: {names[0]}")
+            iso = _make_fake_iso(Path(tmpdir), "UBUNTU_24_04")
+            found = find_installed_isos(Path(tmpdir))
+            self.assertEqual(len(found), 1)
+            name = identify_distro(get_iso_volume_id(found[0]), found[0].name)
+            self.assertEqual(name, "Ubuntu")
+            _ok(f"{iso.name} -> {name}")
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from visync.verify import (
+    VerifyStatus,
     expand_url,
     extract_iso_metadata,
     index_distro_configs,
@@ -161,7 +162,7 @@ class TestRunDirectoryVerify(unittest.TestCase):
             results = run_directory_verify(Path(tmpdir), config)
 
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0][2], True)
+        self.assertIs(results[0][2], VerifyStatus.VERIFIED)
         mock_verify.assert_called_once()
 
 
@@ -186,7 +187,9 @@ class TestVerifyCommand(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             fake_drive = Path(tmpdir)
             mock_drives.return_value = [fake_drive]
-            mock_run.return_value = [(fake_drive / "arch.iso", "Arch Linux", True)]
+            mock_run.return_value = [
+                (fake_drive / "arch.iso", "Arch Linux", VerifyStatus.VERIFIED)
+            ]
 
             result = self.runner.invoke(self.app, ["verify"])
 
@@ -200,7 +203,9 @@ class TestVerifyCommand(unittest.TestCase):
         self, mock_load: MagicMock, mock_run: MagicMock
     ) -> None:
         mock_load.return_value = {"checksums": {"enabled": True}, "distros": {}}
-        mock_run.return_value = [(Path("/tmp/bad.iso"), "Arch Linux", False)]
+        mock_run.return_value = [
+            (Path("/tmp/bad.iso"), "Arch Linux", VerifyStatus.MISMATCH)
+        ]
 
         with tempfile.TemporaryDirectory() as tmpdir:
             result = self.runner.invoke(self.app, ["verify", "--drive", tmpdir])

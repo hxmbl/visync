@@ -67,7 +67,10 @@ def error(msg: str) -> None:
 
 
 def removed(msg: str) -> None:
-    console.print(f"  [yellow]–[/yellow] {_esc(str(msg))}")
+    # A plain hyphen, not an en dash: the CLI's glyphs are ✓ ⚠ ✗ - , and the
+    # en dash (U+2013) is a homoglyph for a hyphen that appears nowhere else in
+    # the output.
+    console.print(f"  [yellow]-[/yellow] {_esc(str(msg))}")
 
 
 def iso_table(rows: list[tuple[str, str, str, str]], total_gb: float) -> None:

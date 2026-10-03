@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import tempfile
 import urllib.request
+from enum import StrEnum
 from pathlib import Path
 from urllib.request import urlopen
 
@@ -30,9 +31,32 @@ from visync.output import warn
 install_safe_opener()
 
 
-# Sentinel result for run_directory_verify / verify_all_isos when checksums
-# could not be obtained (distinct from True=verified, False=mismatch, None=no-config)
-UNAVAILABLE = "unavailable"
+class VerifyStatus(StrEnum):
+    """Outcome of checking one ISO against its published checksums.
+
+    Replaces a ``True | False | None | "unavailable"`` union whose sentinel was
+    a *string*, and therefore truthy: a consumer reaching for ``if result:``
+    reported a file whose checksum could not be fetched as verified. Four
+    explicit members make that mistake a type error rather than a wrong answer.
+
+    UNAVAILABLE is the one that matters most. "The mirror was unreachable" and
+    "this file is fine" must never collapse into the same branch, for the same
+    reason SyncStatus.UNREACHABLE is distinct from SyncStatus.CURRENT.
+    """
+
+    VERIFIED = "verified"
+    MISMATCH = "mismatch"
+    UNAVAILABLE = "unavailable"
+    NO_CONFIG = "no-config"
+
+
+def _status(result: bool | None) -> VerifyStatus:
+    """Fold verify_from_config's tri-state bool|None into a VerifyStatus."""
+    if result is True:
+        return VerifyStatus.VERIFIED
+    if result is False:
+        return VerifyStatus.MISMATCH
+    return VerifyStatus.NO_CONFIG
 
 
 # ── Version comparison utilities ──────────────────────────────────
@@ -47,9 +71,10 @@ def parse_version(version_str: str) -> tuple | None:
     parts = version_str.split(".")
     try:
         parsed = tuple(int(p) for p in parts if p.isdigit())
-        return parsed if parsed else None
     except (ValueError, TypeError):
         return None
+    else:
+        return parsed if parsed else None
 
 
 def compare_versions(remote: str, local: str) -> int:
@@ -63,7 +88,7 @@ def compare_versions(remote: str, local: str) -> int:
     if remote_ver is not None and local_ver is not None:
         if remote_ver > local_ver:
             return 1
-        elif remote_ver < local_ver:
+        if remote_ver < local_ver:
             return -1
         return 0
 
@@ -74,7 +99,7 @@ def compare_versions(remote: str, local: str) -> int:
     )
     if remote > local:
         return 1
-    elif remote < local:
+    if remote < local:
         return -1
     return 0
 
@@ -119,7 +144,7 @@ def compute_iso_hash(iso_path: Path, algo: str = "sha256") -> str:
     if algo not in HASH_ALGOS:
         raise ValueError(f"Unsupported hash algorithm: {algo}")
     h = HASH_ALGOS[algo]()
-    with open(iso_path, "rb") as f:
+    with iso_path.open("rb") as f:
         while True:
             chunk = f.read(65536)
             if not chunk:
@@ -292,9 +317,7 @@ def parse_gpg_checksum(content: str, iso_name: str, algo: str = "sha256") -> str
 
 def _sums_filename(field: str) -> str:
     """Normalize a SUMS filename field (strip binary-mode '*' prefix)."""
-    name = field.strip()
-    name = name.removeprefix("*")
-    return name
+    return field.strip().removeprefix("*")
 
 
 def parse_hashsums(content: str, iso_name: str, algo: str = "sha256") -> str | None:
@@ -343,9 +366,15 @@ def parse_hashsums(content: str, iso_name: str, algo: str = "sha256") -> str | N
 
 
 def parse_tails_json(
-    content: str, iso_name: str = "", algo: str = "sha256"
+    content: str, _iso_name: str = "", algo: str = "sha256"
 ) -> str | None:
-    """Parse Tails latest.json containing a sha256 field."""
+    """Parse Tails latest.json containing a sha256 field.
+
+    Every parser in FORMAT_PARSERS is called as parser(content, iso_name, algo).
+    Tails publishes one digest per platform with no per-file line to match, so
+    iso_name has nothing to select on here — the leading underscore records
+    that the parameter exists for the shared signature, not for this body.
+    """
     try:
         data = json.loads(content)
         digest = data.get("sha256", "")
@@ -355,9 +384,10 @@ def parse_tails_json(
         want = _hex_len_for(algo)
         if want is not None and len(digest) != want:
             return None
-        return digest or None
     except (json.JSONDecodeError, AttributeError):
         return None
+    else:
+        return digest or None
 
 
 FORMAT_PARSERS = {
@@ -521,13 +551,14 @@ def expand_url(
         release_base = str(release_base_url or base).rstrip("/")
         expanded = expanded.replace("{release_base_url}/", release_base + "/")
         expanded = expanded.replace("{release_base_url}", release_base + "/")
-    expanded = expanded.replace("{version}", meta["version"])
-    expanded = expanded.replace("{arch}", meta["arch"])
-    expanded = expanded.replace("{variant_dir}", meta["variant_dir"])
-    expanded = expanded.replace("{checksum_stem}", meta["checksum_stem"])
-    expanded = expanded.replace("{channel}", meta["channel"])
-    expanded = expanded.replace("{release}", meta["release"])
-    return expanded
+    return (
+        expanded.replace("{version}", meta["version"])
+        .replace("{arch}", meta["arch"])
+        .replace("{variant_dir}", meta["variant_dir"])
+        .replace("{checksum_stem}", meta["checksum_stem"])
+        .replace("{channel}", meta["channel"])
+        .replace("{release}", meta["release"])
+    )
 
 
 def index_distro_configs(config: dict) -> dict[str, dict]:
@@ -588,37 +619,37 @@ def _cached_hash_for(iso_path: Path, cached: dict[str, dict]) -> str:
 
 def run_directory_verify(
     iso_dir: Path, config: dict
-) -> list[tuple[Path, str, bool | None | str]]:
+) -> list[tuple[Path, str, VerifyStatus]]:
     """Identify ISOs under *iso_dir* and verify each against config.
 
-    Third element is True (verified), False (mismatch), UNAVAILABLE
-    (checksum could not be fetched/parsed), or None (no checksum config).
+    The third element is always a VerifyStatus; verify_from_config's tri-state
+    return is folded into it here, which is the one place that knows about both.
     """
     distro_map = build_iso_distro_map(iso_dir)
     distro_configs = index_distro_configs(config)
     checksums_config = config.get("checksums", {})
     cached = load_all_metadata(iso_dir)
-    results: list[tuple[Path, str, bool | None | str]] = []
+    results: list[tuple[Path, str, VerifyStatus]] = []
     for iso_path, distro_name in distro_map.values():
         settings = resolve_distro_settings(distro_name, iso_path.name, distro_configs)
         try:
-            result = verify_from_config(
-                iso_path,
-                distro_name,
-                settings,
-                checksums_config,
-                precomputed_hash=_cached_hash_for(iso_path, cached),
+            result = _status(
+                verify_from_config(
+                    iso_path,
+                    settings,
+                    checksums_config,
+                    precomputed_hash=_cached_hash_for(iso_path, cached),
+                )
             )
         except ChecksumUnavailable as e:
             warn(f"{iso_path.name} — {e}")
-            result = UNAVAILABLE
+            result = VerifyStatus.UNAVAILABLE
         results.append((iso_path, distro_name, result))
     return results
 
 
 def verify_from_config(
     iso_path: Path,
-    distro_name: str,
     distro_config: dict,
     checksums_config: dict,
     precomputed_hash: str = "",
@@ -627,6 +658,10 @@ def verify_from_config(
 
     Returns True/False on success, None if no checksum config is available.
     If *precomputed_hash* is provided, skip re-hashing the file.
+
+    There is deliberately no distro-name parameter: the caller has already
+    resolved the name into *distro_config*, and download_iso passed an empty
+    string here, so nothing ever read it.
     """
     if not checksums_config.get("enabled", True):
         return None
@@ -666,27 +701,3 @@ def verify_from_config(
         signing_key_fingerprint=key_fingerprint,
         precomputed_hash=precomputed_hash,
     )
-
-
-def verify_all_isos(
-    distro_map: dict[str, tuple[Path, str]],
-    distro_configs: dict[str, dict],
-    checksums_config: dict,
-) -> list[tuple[Path, str, bool | None | str]]:
-    """Verify all ISOs in a directory against their distro's checksums.
-
-    *distro_map* maps ISO path string → (iso_path, distro_name).
-    Returns list of (iso_path, distro_name, result).
-    """
-    results: list[tuple[Path, str, bool | None | str]] = []
-    for iso_path, distro_name in distro_map.values():
-        settings = resolve_distro_settings(distro_name, iso_path.name, distro_configs)
-        try:
-            result = verify_from_config(
-                iso_path, distro_name, settings, checksums_config
-            )
-        except ChecksumUnavailable as e:
-            warn(f"{iso_path.name} — {e}")
-            result = UNAVAILABLE
-        results.append((iso_path, distro_name, result))
-    return results

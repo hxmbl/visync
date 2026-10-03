@@ -1,6 +1,5 @@
 #!/visync/config.toml
 [iso]
-source_dir = ""
 download_dir = ""
 # ^ We don't download straight to the ventoy drive as its faster to verify and acts as a buffer. --no-buffer flag can override this, but verify will still happen, just on the drive.
 

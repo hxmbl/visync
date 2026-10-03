@@ -3,6 +3,7 @@
 Each test maps to an audit finding ID (C1..C3, H1..H4, M1..M6, L1..L13).
 """
 
+import ast
 import json
 import os
 import re
@@ -610,6 +611,96 @@ class TestSafeFilename(unittest.TestCase):
 
     def test_dotdot_only_rejected(self):
         self.assertEqual(_safe_filename(".."), "")
+
+
+class TestStrategyDispatchTerminates(unittest.TestCase):
+    """The strategy chain was rewritten from `elif` to `if` (RET505).
+
+    That is only safe because every branch returns on every path. If one ever
+    stops doing so, control reaches the *next* strategy and runs it with the
+    wrong settings — a silent wrong download rather than an error. This asserts
+    the property directly from the AST so the shape cannot regress unnoticed.
+    """
+
+    def _dispatch_chain(self):
+        # Resolved from this file, not the cwd, so the test does not depend on
+        # where pytest was invoked from.
+        source = Path(__file__).resolve().parent.parent / "visync" / "download.py"
+        fn = next(
+            n
+            for n in ast.parse(source.read_text()).body
+            if isinstance(n, ast.FunctionDef) and n.name == "process_scraping_strategy"
+        )
+        chain = []
+
+        def walk(body):
+            for st in body:
+                if isinstance(st, ast.If):
+                    chain.append(st)
+                    if st.orelse:
+                        walk(st.orelse)
+
+        walk(fn.body)
+        return chain
+
+    def _falls_through(self, stmts):
+        """True when the block can complete normally (i.e. reach the next branch)."""
+        if not stmts:
+            return True
+        last = stmts[-1]
+        if isinstance(last, (ast.Return, ast.Raise)):
+            return False
+        if isinstance(last, ast.If):
+            return self._falls_through(last.body) and (
+                not last.orelse or self._falls_through(last.orelse)
+            )
+        if isinstance(last, ast.Try):
+            if self._falls_through(last.body):
+                return True
+            if any(self._falls_through(h.body) for h in last.handlers):
+                return True
+            if last.orelse and self._falls_through(last.orelse):
+                return True
+            return bool(last.finalbody) and self._falls_through(last.finalbody)
+        if isinstance(last, (ast.With, ast.AsyncWith)):
+            return self._falls_through(last.body)
+        return True
+
+    def test_no_strategy_branch_can_fall_into_the_next(self):
+        offenders = []
+        for node in self._dispatch_chain():
+            test = ast.unparse(node.test)
+            if self._falls_through(node.body) or (
+                node.orelse and self._falls_through(node.orelse)
+            ):
+                offenders.append(test)
+        self.assertEqual(offenders, [], f"branches that fall through: {offenders}")
+
+    def test_all_six_strategies_are_present(self):
+        tests = [ast.unparse(n.test) for n in self._dispatch_chain()]
+        for strategy in (
+            "direct_match",
+            "fedora_nested",
+            "ubuntu_nested",
+            "nixos_channel",
+            "popos_api",
+            "tails_api",
+        ):
+            with self.subTest(strategy=strategy):
+                self.assertTrue(
+                    any(f"'{strategy}'" in t for t in tests),
+                    f"{strategy} missing from the dispatch chain",
+                )
+
+    def test_unknown_strategy_still_reports_itself(self):
+        from visync.download import process_scraping_strategy
+
+        settings = {"strategy": "definitely_not_a_strategy", "base_url": ""}
+        with patch.object(dl, "ping_mirror", return_value=True):
+            filename, url = process_scraping_strategy("X", settings)
+        self.assertEqual(filename, "")
+        self.assertEqual(url, "")
+        self.assertIn("unhandled strategy", settings.get("resolve_error", ""))
 
 
 class TestScrapeFilenamesAreSanitised(unittest.TestCase):
@@ -2093,9 +2184,8 @@ class TestLoopbackExemption(unittest.TestCase):
             "http://[::ffff:127.0.0.1]/x",
             "file:///etc/passwd",
         ):
-            with self.subTest(url=url):
-                with self.assertRaises(ValueError):
-                    require_https(url)
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                require_https(url)
 
 
 class TestSigningKeyMustBeHttps(unittest.TestCase):
@@ -2109,13 +2199,15 @@ class TestSigningKeyMustBeHttps(unittest.TestCase):
     def test_http_key_url_is_refused_before_any_fetch(self):
         from visync.verify import _import_key_then_verify
 
-        with patch("visync.verify.urlopen") as mu:
-            with self.assertRaises(ChecksumUnavailable) as ctx:
-                _import_key_then_verify(
-                    Path("/tmp/CHECKSUM"),
-                    "http://deb.parrot.sh/parrot/misc/archive.gpg",
-                    "B711822346552E4D92DA02DF7A8286AF0E81EE4A",
-                )
+        with (
+            patch("visync.verify.urlopen") as mu,
+            self.assertRaises(ChecksumUnavailable) as ctx,
+        ):
+            _import_key_then_verify(
+                Path("/tmp/CHECKSUM"),
+                "http://deb.parrot.sh/parrot/misc/archive.gpg",
+                "B711822346552E4D92DA02DF7A8286AF0E81EE4A",
+            )
         mu.assert_not_called()
         self.assertIn("non-HTTPS", str(ctx.exception))
 
@@ -2195,9 +2287,11 @@ class TestInterruptDiscardsPartial(unittest.TestCase):
                 written["part"] = part
                 raise KeyboardInterrupt
 
-            with patch("visync.download.DEFAULT_STAGING_DIR", Path(staging)):
-                with self.assertRaises(KeyboardInterrupt):
-                    self._run(fake_download)
+            with (
+                patch("visync.download.DEFAULT_STAGING_DIR", Path(staging)),
+                self.assertRaises(KeyboardInterrupt),
+            ):
+                self._run(fake_download)
             self.assertTrue(written["part"].name.endswith(".part"))
             self.assertFalse(
                 written["part"].exists(), "the interrupted partial must be removed"
@@ -2212,10 +2306,12 @@ class TestInterruptDiscardsPartial(unittest.TestCase):
             with patch.object(Path, "unlink", side_effect=OSError("read-only")):
                 raise KeyboardInterrupt
 
-        with tempfile.TemporaryDirectory() as staging:
-            with patch("visync.download.DEFAULT_STAGING_DIR", Path(staging)):
-                with self.assertRaises(KeyboardInterrupt):
-                    self._run(fake_download)
+        with (
+            tempfile.TemporaryDirectory() as staging,
+            patch("visync.download.DEFAULT_STAGING_DIR", Path(staging)),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            self._run(fake_download)
 
     def test_cli_exits_130_on_interrupt(self):
         """The CLI turns Ctrl-C into a clean exit(130), not a traceback."""
@@ -2233,3 +2329,110 @@ class TestInterruptDiscardsPartial(unittest.TestCase):
             )
         self.assertEqual(result.exit_code, 130, result.output)
         self.assertNotIn("Traceback", result.output)
+
+
+# ── VerifyStatus: "could not check" must never read as "checked and fine" ────
+
+
+class TestVerifyStatus(unittest.TestCase):
+    """The third element of a verify result used to be
+    ``True | False | None | "unavailable"``.
+
+    The sentinel was a *string*, so it was truthy. The one consumer happened to
+    compare with `==` after two `is` checks, so nothing was wrong — yet. Any
+    future `if result:` would have reported a file whose checksum could not be
+    fetched as verified, which is the exact failure SyncStatus.UNREACHABLE was
+    introduced to prevent on the download side.
+    """
+
+    def test_members_are_distinct(self):
+        from visync.verify import VerifyStatus
+
+        values = [m.value for m in VerifyStatus]
+        self.assertEqual(len(values), len(set(values)))
+        self.assertIn("unavailable", values)
+
+    def test_unavailable_is_not_equal_to_verified_or_none(self):
+        from visync.verify import VerifyStatus
+
+        self.assertNotEqual(VerifyStatus.UNAVAILABLE, True)
+        self.assertNotEqual(VerifyStatus.UNAVAILABLE, False)
+        self.assertNotEqual(VerifyStatus.UNAVAILABLE, None)
+        self.assertNotEqual(VerifyStatus.UNAVAILABLE, VerifyStatus.VERIFIED)
+
+    def test_folding_is_total_and_injective(self):
+        from visync.verify import VerifyStatus, _status
+
+        # Keyword form: a bare True/False here is exactly what FBT003 exists to
+        # catch, and the rule is enabled for tests too.
+        self.assertIs(_status(result=True), VerifyStatus.VERIFIED)
+        self.assertIs(_status(result=False), VerifyStatus.MISMATCH)
+        self.assertIs(_status(result=None), VerifyStatus.NO_CONFIG)
+
+    def test_unavailable_is_distinct_from_a_clean_result(self):
+        """The CLI counts these separately and exits non-zero on one only."""
+        from visync.verify import VerifyStatus
+
+        for status in VerifyStatus:
+            if status is VerifyStatus.UNAVAILABLE:
+                continue
+            with self.subTest(status=status):
+                self.assertNotEqual(status, VerifyStatus.UNAVAILABLE)
+
+    def test_a_bool_can_no_longer_stand_in_for_a_status(self):
+        """Pin the type: verify_from_config's tri-state is converted at the edge."""
+        from visync.verify import VerifyStatus, _status
+
+        self.assertNotIsInstance(_status(result=True), bool)
+        self.assertNotIsInstance(_status(result=None), bool)
+        self.assertIsInstance(_status(result=True), VerifyStatus)
+
+
+class TestAutodetectReadsStateOnce(unittest.TestCase):
+    """autodetect re-read installed.json for every ISO on the drive.
+
+    The in-loop read was only correct because mark_installed happened to write
+    the entry back out. Hoisting it must keep the "already registered" behaviour
+    exactly, including for two ISOs that resolve to the same entry.
+    """
+
+    def _run(self, iso_names, installed_ids):
+        from typer.testing import CliRunner
+
+        from visync.main import app
+
+        calls = []
+
+        def fake_get_installed(drive_root):
+            calls.append(drive_root)
+            return list(installed_ids)
+
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch("visync.pm.get_installed_ids", side_effect=fake_get_installed),
+            patch("visync.pm.mark_installed") as mark,
+            patch("visync.main.find_installed_isos") as find,
+            patch("visync.main.get_iso_volume_id", return_value=""),
+            patch("visync.main.identify_distro", return_value="Arch Linux"),
+            patch("visync.main.load_config") as cfg,
+        ):
+            (Path(tmpdir) / "ventoy").mkdir()
+            find.return_value = [Path(tmpdir) / n for n in iso_names]
+            cfg.return_value = {
+                "distros": {
+                    "ArchLinux": {"clean_name": "Arch Linux", "keyword": "arch"}
+                }
+            }
+            result = CliRunner().invoke(app, ["autodetect", "--drive", tmpdir])
+        return result, len(calls), mark
+
+    def test_state_read_once_per_drive_not_once_per_iso(self):
+        _result, reads, mark = self._run(
+            ["archlinux-2025.iso", "archlinux-2026.iso", "archlinux-2027.iso"], []
+        )
+        self.assertEqual(reads, 1, "installed.json must be parsed once per drive")
+        self.assertEqual(mark.call_count, 1, "the same entry must be registered once")
+
+    def test_already_registered_is_still_skipped(self):
+        _result, _reads, mark = self._run(["archlinux-2026.iso"], ["ArchLinux"])
+        self.assertEqual(mark.call_count, 0)

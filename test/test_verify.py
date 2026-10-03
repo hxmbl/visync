@@ -17,7 +17,6 @@ from visync.verify import (
     parse_gpg_checksum,
     parse_hashsums,
     parse_tails_json,
-    verify_all_isos,
     verify_from_config,
     verify_iso,
 )
@@ -450,7 +449,6 @@ class TestVerifyFromConfig(unittest.TestCase):
         _section("verify_from_config: No checksum config")
         result = verify_from_config(
             iso_path=Path("/tmp/test.iso"),
-            distro_name="Fedora",
             distro_config={},
             checksums_config={},
         )
@@ -460,31 +458,11 @@ class TestVerifyFromConfig(unittest.TestCase):
     def test_disabled_checksums_returns_none(self) -> None:
         result = verify_from_config(
             iso_path=Path("/tmp/test.iso"),
-            distro_name="Fedora",
             distro_config={"checksum_url": "https://example.com/CHECKSUM"},
             checksums_config={"enabled": False},
         )
         self.assertIsNone(result)
         _ok("Returns None when checksums disabled in config")
-
-
-class TestVerifyAllIsos(unittest.TestCase):
-    def test_iterates_over_distro_map(self) -> None:
-        _section("verify_all_isos: Iteration")
-        distro_map = {
-            "/tmp/isos/a.iso": (Path("/tmp/isos/a.iso"), "Arch Linux"),
-            "/tmp/isos/b.iso": (Path("/tmp/isos/b.iso"), "Ubuntu Server"),
-        }
-        configs = {
-            "Arch Linux": {"checksum_url": "https://example.com/sha256sums.txt"},
-            "Ubuntu Server": {},
-        }
-        results = verify_all_isos(distro_map, configs, {})
-        self.assertEqual(len(results), 2)
-        self.assertEqual(results[0][1], "Arch Linux")
-        self.assertEqual(results[1][1], "Ubuntu Server")
-        _info(f"Processed {len(results)} ISOs")
-        _ok("verify_all_isos iterated correctly")
 
 
 if __name__ == "__main__":

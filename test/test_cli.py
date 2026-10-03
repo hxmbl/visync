@@ -41,6 +41,16 @@ def _mock_find_installed(iso_dir: Path) -> list[Path]:
     return sorted(iso_dir.glob("*.iso"))
 
 
+def _make_ventoy_dir(tmpdir: str) -> Path:
+    """Give a temp dir the marker that makes --drive treat it as a real drive.
+
+    Without this, a test that exercises a command's own prompt would have its
+    "n" swallowed by the not-a-Ventoy-drive prompt, and --yes would skip both.
+    """
+    (Path(tmpdir) / "ventoy").mkdir(exist_ok=True)
+    return Path(tmpdir)
+
+
 def _mock_get_vid(iso_path: Path) -> str:
     return ""
 
@@ -325,12 +335,11 @@ class TestRemove(unittest.TestCase):
         """Without --yes and without interactive confirmation, nothing is deleted."""
         mock_cfg.return_value = MOCK_CONFIG
         with tempfile.TemporaryDirectory() as tmpdir:
+            _make_ventoy_dir(tmpdir)
             iso = Path(tmpdir) / "archlinux-2026.iso"
             iso.write_bytes(b"\x00" * 1024)
             # No input provided -> confirm() aborts -> file must survive
-            result = runner.invoke(
-                app, ["--yes", "remove", "archlinux", "--drive", tmpdir]
-            )
+            result = runner.invoke(app, ["remove", "archlinux", "--drive", tmpdir])
             self.assertNotEqual(result.exit_code, 0)
             self.assertTrue(iso.exists(), "File must survive aborted confirmation")
 
@@ -344,14 +353,38 @@ class TestRemove(unittest.TestCase):
         """Answering 'n' to the confirmation keeps the file."""
         mock_cfg.return_value = MOCK_CONFIG
         with tempfile.TemporaryDirectory() as tmpdir:
+            _make_ventoy_dir(tmpdir)
             iso = Path(tmpdir) / "archlinux-2026.iso"
             iso.write_bytes(b"\x00" * 1024)
             result = runner.invoke(
-                app, ["--yes", "remove", "archlinux", "--drive", tmpdir], input="n\n"
+                app, ["remove", "archlinux", "--drive", tmpdir], input="n\n"
             )
             self.assertEqual(result.exit_code, 0)
             self.assertTrue(iso.exists())
             self.assertIn("nothing deleted", result.stdout)
+
+    @patch("visync.main.identify_distro", side_effect=_mock_identify_distro)
+    @patch("visync.main.get_iso_volume_id", side_effect=_mock_get_vid)
+    @patch("visync.main.find_installed_isos", side_effect=_mock_find_installed)
+    @patch("visync.main.load_config")
+    def test_remove_global_yes_also_skips_the_prompt(
+        self, mock_cfg: MagicMock, *_: MagicMock
+    ) -> None:
+        """`--yes` before the command means the same as `remove --yes`.
+
+        The global flag answers every confirmation, so a script can put it once
+        at the front instead of remembering which commands have their own.
+        """
+        mock_cfg.return_value = MOCK_CONFIG
+        with tempfile.TemporaryDirectory() as tmpdir:
+            iso = Path(tmpdir) / "archlinux-2026.iso"
+            iso.write_bytes(b"\x00" * 1024)
+            result = runner.invoke(
+                app, ["--yes", "remove", "archlinux", "--drive", tmpdir]
+            )
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertFalse(iso.exists(), "global --yes must skip the prompt")
+            self.assertNotIn("Delete these file(s)?", result.output)
 
     @patch("visync.main.identify_distro", side_effect=_mock_identify_distro)
     @patch("visync.main.get_iso_volume_id", side_effect=_mock_get_vid)
@@ -606,8 +639,13 @@ class TestList(unittest.TestCase):
 
     def test_list_has_flags(self) -> None:
         result = runner.invoke(app, ["list", "--help"])
-        self.assertIn("--config", result.stdout)
         self.assertIn("--drive", result.stdout)
+        self.assertNotIn(
+            "--config",
+            result.stdout,
+            "list reads the drive and the metadata sidecars only; a --config "
+            "it ignored was a lie about what the flag does",
+        )
 
     def test_list_does_not_have_dry_run(self) -> None:
         result = runner.invoke(app, ["list", "--help"])
@@ -744,9 +782,20 @@ class TestGlobalYesFlag(unittest.TestCase):
             meta_dir = Path(tmpdir) / ".visync" / "metadata"
             meta_dir.mkdir(parents=True)
             (meta_dir / "arch.iso.json").write_text("{}")
-            result = runner.invoke(app, ["--yes", "nuke-metadata", "--drive", tmpdir])
+            result = runner.invoke(app, ["nuke-metadata", "--drive", tmpdir])
             self.assertNotEqual(result.exit_code, 0)
             self.assertTrue((meta_dir / "arch.iso.json").exists())
+
+    def test_nuke_metadata_global_yes_skips_the_prompt(self) -> None:
+        """`--yes` before the command is enough; the local flag is optional."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            meta_dir = Path(tmpdir) / ".visync" / "metadata"
+            meta_dir.mkdir(parents=True)
+            (meta_dir / "arch.iso.json").write_text("{}")
+            result = runner.invoke(app, ["--yes", "nuke-metadata", "--drive", tmpdir])
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertNotIn("Delete these file(s)?", result.output)
+            self.assertFalse((meta_dir / "arch.iso.json").exists())
 
     def test_nuke_metadata_never_deletes_non_json(self) -> None:
         """Files other than .json inside metadata/ are never deleted."""
@@ -765,11 +814,16 @@ class TestGlobalYesFlag(unittest.TestCase):
             self.assertFalse((meta_dir / "arch.iso.json").exists())
 
     def test_nuke_metadata_has_flags(self) -> None:
-        """nuke-metadata accepts --config, --drive, --dry-run."""
+        """nuke-metadata accepts --drive, --dry-run, --yes; no --config.
+
+        It deletes .visync/metadata/*.json off the drive and reads nothing else,
+        so a --config it ignored would only mislead.
+        """
         result = runner.invoke(app, ["nuke-metadata", "--help"])
-        self.assertIn("--config", result.stdout)
+        self.assertNotIn("--config", result.stdout)
         self.assertIn("--drive", result.stdout)
         self.assertIn("--dry-run", result.stdout)
+        self.assertIn("--yes", result.stdout)
 
 
 # ── version ──────────────────────────────────────────────────────────────────
@@ -820,9 +874,21 @@ class TestFlagConsistency(unittest.TestCase):
             )
 
     def test_read_commands_have_config_and_drive(self) -> None:
-        for cmd in ["search", "info", "list", "verify"]:
+        """Every read command takes --config and --drive, except the two that
+        need neither.
+
+        `list` and `nuke-metadata` read nothing but the drive itself and its
+        metadata sidecars, so both flags were previously accepted and ignored.
+        A flag that does nothing is a bug report waiting to happen, so they are
+        gone rather than lying.
+        """
+        for cmd in ["search", "info", "verify"]:
             opts = self._get_options(cmd)
             self.assertIn("--config", opts, f"{cmd} missing --config")
+            self.assertIn("--drive", opts, f"{cmd} missing --drive")
+        for cmd in ["list", "nuke-metadata"]:
+            opts = self._get_options(cmd)
+            self.assertNotIn("--config", opts, f"{cmd} should not take --config")
             self.assertIn("--drive", opts, f"{cmd} missing --drive")
 
 
@@ -839,7 +905,6 @@ class TestShortFlags(unittest.TestCase):
             "update",
             "search",
             "info",
-            "list",
             "sync",
             "verify",
             "autodetect",
@@ -847,6 +912,11 @@ class TestShortFlags(unittest.TestCase):
             opts = self._get_options(cmd)
             self.assertIn("--config", opts)
             self.assertIn("-c", opts, f"{cmd} missing -c")
+
+    def test_no_stray_c_where_config_is_gone(self) -> None:
+        """-c must not linger on a command that no longer reads a config."""
+        for cmd in ["list", "nuke-metadata"]:
+            self.assertNotIn("-c", self._get_options(cmd))
 
     def test_d_is_drive(self) -> None:
         for cmd in [
@@ -994,12 +1064,12 @@ class TestNonVentoyDriveConfirmation(unittest.TestCase):
             confirm.assert_called_once()
 
     def test_declining_aborts(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with (
-                patch("visync.main.typer.confirm", return_value=False),
-                self.assertRaises(typer.Exit),
-            ):
-                _get_drives(drives=[Path(tmpdir)])
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch("visync.main.typer.confirm", return_value=False),
+            self.assertRaises(typer.Exit),
+        ):
+            _get_drives(drives=[Path(tmpdir)])
 
     def test_assume_yes_skips_prompt(self) -> None:
         visync_main._ASSUME_YES = True

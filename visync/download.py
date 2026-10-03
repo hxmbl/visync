@@ -10,6 +10,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
 from typing import NamedTuple
@@ -263,7 +264,7 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
         return fail(f"iso_regex matched nothing on {base_url}")
 
     # Strategy B: Two-Tier Version Directory Traversal for Fedora
-    elif strategy == "fedora_nested":
+    if strategy == "fedora_nested":
         if not base_url or not iso_regex or not version_regex:
             warn(f"{name} — fedora_nested requires base_url, iso_regex, version_regex")
             return fail("config incomplete: needs base_url + iso_regex + version_regex")
@@ -299,7 +300,7 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
         return fail(f"iso_regex matched nothing in {iso_dir_url}")
 
     # Strategy C: Directory Sub-paths for Ubuntu Ecosystem Releases
-    elif strategy == "ubuntu_nested":
+    if strategy == "ubuntu_nested":
         if not base_url or not iso_regex or not version_regex:
             warn(f"{name} — ubuntu_nested requires base_url, iso_regex, version_regex")
             return fail("config incomplete: needs base_url + iso_regex + version_regex")
@@ -345,7 +346,7 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
         return fail(f"iso_regex matched nothing in {iso_dir_url} (upstream layout?)")
 
     # Strategy D: NixOS channel page — parse version, construct ISO URL
-    elif strategy == "nixos_channel":
+    if strategy == "nixos_channel":
         # NixOS publishes no nixos-stable alias, so derive the current stable
         # channel from the release bucket before touching the channel page.
         channel, channel_err = _nixos_stable_channel(settings)
@@ -521,6 +522,16 @@ def _download_threads() -> int:
     return max(1, min(n, MAX_DOWNLOAD_THREADS))
 
 
+def _seek_write(fd: int, data: bytes, offset: int) -> int:
+    """Write *data* at *offset* via a positioned descriptor.
+
+    The fallback for platforms without os.pwrite, where each thread owns a
+    descriptor and must move its own cursor before writing.
+    """
+    os.lseek(fd, offset, os.SEEK_SET)
+    return os.write(fd, data)
+
+
 def _download_chunked(
     url: str,
     part_path: Path,
@@ -572,9 +583,23 @@ def _download_chunked(
     def _download_chunk(idx: int, chunk_start: int, chunk_end: int) -> None:
         nonlocal downloaded
         range_header = f"bytes={chunk_start}-{chunk_end}"
-        thread_fd = None
-        if not pwrite_available:
+
+        # Bind the write strategy once per chunk thread instead of branching on
+        # pwrite_available at every write. os.pwrite writes at an offset without
+        # moving the shared file cursor, which is what makes parallel chunk
+        # writes safe; platforms without it get a private descriptor plus an
+        # explicit seek. Binding it here also removes the `thread_fd is None`
+        # assertion that used to guard the second branch: an assert cannot do
+        # that job under `python -O`, where it is stripped and the fallback
+        # would call os.lseek(None, ...).
+        thread_fd: int | None = None
+        if pwrite_available:
+            write_at: Callable[[bytes, int], int] = lambda data, off: os.pwrite(
+                fd, data, off
+            )
+        else:
             thread_fd = os.open(str(part_path), os.O_WRONLY | _BINARY)
+            write_at = lambda data, off, _f=thread_fd: _seek_write(_f, data, off)
         try:
             req = urllib.request.Request(
                 url,
@@ -630,12 +655,7 @@ def _download_chunked(
                                 f"by {len(data) - room} bytes"
                             )
                         return
-                    if pwrite_available:
-                        written = os.pwrite(fd, data, offset)
-                    else:
-                        assert thread_fd is not None
-                        os.lseek(thread_fd, offset, os.SEEK_SET)
-                        written = os.write(thread_fd, data)
+                    written = write_at(data, offset)
                     offset += written
                     with lock:
                         downloaded[idx] = offset - chunk_start
@@ -713,7 +733,7 @@ def _download_single_stream(
                     filename=_esc(filename),
                     total=total or None,
                 )
-                with open(part_path, "wb", buffering=1048576) as f:
+                with part_path.open("wb", buffering=1048576) as f:
                     while True:
                         try:
                             chunk = resp.read(CHUNK_SIZE)
@@ -844,7 +864,7 @@ def download_iso(
     try:
         try:
             h = hashlib.sha256()
-            with open(dest_path, "rb") as f:
+            with dest_path.open("rb") as f:
                 while True:
                     chunk = f.read(65536)
                     if not chunk:
@@ -862,7 +882,6 @@ def download_iso(
             try:
                 result = verify_from_config(
                     dest_path,
-                    "",
                     distro_config,
                     checksums_config,
                     precomputed_hash=sha256_hex,
@@ -875,7 +894,7 @@ def download_iso(
                 error(f"Checksum verification failed for {dest_path.name} — deleting")
                 dest_path.unlink(missing_ok=True)
                 return False
-            elif result is True:
+            if result is True:
                 success(f"Checksum verified: {dest_path.name}")
             else:
                 warn(f"No checksum config for {dest_path.name} — installed UNVERIFIED")
@@ -1180,7 +1199,7 @@ def _copy_with_progress(src: Path, dst: Path, filename: str) -> None:
             "copy to drive", filename=_esc(filename), total=total or None
         )
         copied = 0
-        with open(src, "rb") as rf, open(dst, "wb") as wf:
+        with src.open("rb") as rf, dst.open("wb") as wf:
             while True:
                 chunk = rf.read(1024 * 1024)
                 if not chunk:

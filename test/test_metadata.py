@@ -72,7 +72,7 @@ class TestWriteIsoMetadata(unittest.TestCase):
                 drive / ".visync" / "metadata" / "archlinux-2026.06.01-x86_64.iso.json"
             )
             self.assertTrue(meta_file.exists())
-            with open(meta_file) as f:
+            with meta_file.open() as f:
                 data = json.load(f)
             self.assertEqual(data["variant_stem"], "archlinux-x86_64")
             self.assertEqual(data["version"], "2026.06.01")
