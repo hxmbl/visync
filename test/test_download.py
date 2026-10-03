@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.download import (
+from visync.download import (
     DEBUG,
     SyncStatus,
     _check_distro,
@@ -50,17 +50,17 @@ class TestDebugMode(unittest.TestCase):
     @patch.dict(os.environ, {"VISYNC_DEBUG": "1"})
     def test_debug_on_with_env(self):
         _section("Debug Mode: Enabled via ENV")
-        import src.download
+        import visync.download as dl
 
-        old = src.download.DEBUG
-        src.download.DEBUG = True
-        self.assertTrue(src.download.DEBUG)
-        src.download.DEBUG = old
+        old = dl.DEBUG
+        dl.DEBUG = True
+        self.assertTrue(dl.DEBUG)
+        dl.DEBUG = old
         _ok("VISYNC_DEBUG=1 enables debug mode")
 
 
 class TestPingMirror(unittest.TestCase):
-    @patch("src.download.socket.create_connection")
+    @patch("visync.download.socket.create_connection")
     def test_ping_success(self, mock_conn: MagicMock):
         _section("ping_mirror: Reachable Host")
         mock_conn.return_value.__enter__ = MagicMock(return_value=mock_conn)
@@ -69,7 +69,7 @@ class TestPingMirror(unittest.TestCase):
         self.assertTrue(result)
         _ok("Returns True on successful TCP connect")
 
-    @patch("src.download.socket.create_connection")
+    @patch("visync.download.socket.create_connection")
     def test_ping_timeout(self, mock_conn: MagicMock):
         _section("ping_mirror: Timeout")
         mock_conn.side_effect = TimeoutError("timed out")
@@ -77,7 +77,7 @@ class TestPingMirror(unittest.TestCase):
         self.assertFalse(result)
         _ok("Returns False on timeout")
 
-    @patch("src.download.socket.create_connection")
+    @patch("visync.download.socket.create_connection")
     def test_ping_connection_refused(self, mock_conn: MagicMock):
         _section("ping_mirror: Connection Refused")
         mock_conn.side_effect = ConnectionRefusedError
@@ -87,7 +87,7 @@ class TestPingMirror(unittest.TestCase):
 
     def test_ping_parses_port_from_url(self):
         _section("ping_mirror: Port Extraction")
-        with patch("src.download.socket.create_connection") as mock_conn:
+        with patch("visync.download.socket.create_connection") as mock_conn:
             mock_conn.return_value.__enter__ = MagicMock(return_value=mock_conn)
             mock_conn.return_value.__exit__ = MagicMock(return_value=False)
             ping_mirror("https://example.com:8443/path")
@@ -97,7 +97,7 @@ class TestPingMirror(unittest.TestCase):
 
     def test_ping_defaults_https_port(self):
         _section("ping_mirror: Default HTTPS Port")
-        with patch("src.download.socket.create_connection") as mock_conn:
+        with patch("visync.download.socket.create_connection") as mock_conn:
             mock_conn.return_value.__enter__ = MagicMock(return_value=mock_conn)
             mock_conn.return_value.__exit__ = MagicMock(return_value=False)
             ping_mirror("https://example.com")
@@ -107,7 +107,7 @@ class TestPingMirror(unittest.TestCase):
 
     def test_ping_defaults_http_port(self):
         _section("ping_mirror: Default HTTP Port")
-        with patch("src.download.socket.create_connection") as mock_conn:
+        with patch("visync.download.socket.create_connection") as mock_conn:
             mock_conn.return_value.__enter__ = MagicMock(return_value=mock_conn)
             mock_conn.return_value.__exit__ = MagicMock(return_value=False)
             ping_mirror("http://example.com")
@@ -217,8 +217,8 @@ class TestVariantStem(unittest.TestCase):
 
 
 class TestFetchHtml(unittest.TestCase):
-    @patch("src.download.urllib.request.urlopen")
-    @patch("src.download.urllib.request.Request")
+    @patch("visync.download.urllib.request.urlopen")
+    @patch("visync.download.urllib.request.Request")
     def test_fetch_html_success(self, mock_request: MagicMock, mock_urlopen: MagicMock):
         _section("fetch_html: Successful Request")
         mock_response = MagicMock()
@@ -230,8 +230,8 @@ class TestFetchHtml(unittest.TestCase):
         self.assertEqual(result, "<html>content</html>")
         _ok("HTML content returned as string")
 
-    @patch("src.download.urllib.request.urlopen")
-    @patch("src.download.urllib.request.Request")
+    @patch("visync.download.urllib.request.urlopen")
+    @patch("visync.download.urllib.request.Request")
     def test_fetch_html_failure(self, mock_request: MagicMock, mock_urlopen: MagicMock):
         _section("fetch_html: Network Failure")
         mock_urlopen.side_effect = Exception("timeout")
@@ -239,8 +239,8 @@ class TestFetchHtml(unittest.TestCase):
         self.assertEqual(result, "")
         _ok("Empty string returned on timeout")
 
-    @patch("src.download.urllib.request.urlopen")
-    @patch("src.download.urllib.request.Request")
+    @patch("visync.download.urllib.request.urlopen")
+    @patch("visync.download.urllib.request.Request")
     def test_bot_challenge_detected(
         self, mock_request: MagicMock, mock_urlopen: MagicMock
     ):
@@ -253,8 +253,8 @@ class TestFetchHtml(unittest.TestCase):
         self.assertEqual(result, "")
         _ok("Anubis challenge detected, empty string returned")
 
-    @patch("src.download.urllib.request.urlopen")
-    @patch("src.download.urllib.request.Request")
+    @patch("visync.download.urllib.request.urlopen")
+    @patch("visync.download.urllib.request.Request")
     def test_ssl_error_auto_skips(
         self, mock_request: MagicMock, mock_urlopen: MagicMock
     ):
@@ -266,8 +266,8 @@ class TestFetchHtml(unittest.TestCase):
         self.assertEqual(result, "")
         _ok("SSL error returns empty string without prompting (non-interactive)")
 
-    @patch("src.download.urllib.request.urlopen")
-    @patch("src.download.urllib.request.Request")
+    @patch("visync.download.urllib.request.urlopen")
+    @patch("visync.download.urllib.request.Request")
     def test_url_error_returns_empty(
         self, mock_request: MagicMock, mock_urlopen: MagicMock
     ):
@@ -302,8 +302,8 @@ class TestLoadConfig(unittest.TestCase):
 
 
 class TestProcessScrapingStrategy(unittest.TestCase):
-    @patch("src.download.ping_mirror", return_value=True)
-    @patch("src.download.fetch_html")
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.fetch_html")
     def test_direct_match_found(self, mock_fetch_html: MagicMock, mock_ping: MagicMock):
         _section("Strategy: direct_match — Found")
         mock_fetch_html.return_value = (
@@ -319,8 +319,8 @@ class TestProcessScrapingStrategy(unittest.TestCase):
         self.assertEqual(url, "https://example.com/iso/archlinux-2025.01.01-x86_64.iso")
         _ok(f"Resolved to {name}")
 
-    @patch("src.download.ping_mirror", return_value=True)
-    @patch("src.download.fetch_html")
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.fetch_html")
     def test_direct_match_not_found(
         self, mock_fetch_html: MagicMock, mock_ping: MagicMock
     ):
@@ -336,8 +336,8 @@ class TestProcessScrapingStrategy(unittest.TestCase):
         self.assertEqual(url, "")
         _ok("Empty strings returned when no match")
 
-    @patch("src.download.ping_mirror", return_value=True)
-    @patch("src.download.fetch_html")
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.fetch_html")
     def test_fedora_nested_found(
         self, mock_fetch_html: MagicMock, mock_ping: MagicMock
     ):
@@ -357,8 +357,8 @@ class TestProcessScrapingStrategy(unittest.TestCase):
         self.assertIn("42/Workstation/x86_64/iso/", url)
         _ok(f"Resolved to Fedora 42: {name}")
 
-    @patch("src.download.ping_mirror", return_value=True)
-    @patch("src.download.fetch_html")
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.fetch_html")
     def test_ubuntu_nested_found(
         self, mock_fetch_html: MagicMock, mock_ping: MagicMock
     ):
@@ -378,8 +378,8 @@ class TestProcessScrapingStrategy(unittest.TestCase):
         self.assertIn("24.10/", url)
         _ok(f"Resolved to Ubuntu 24.10: {name}")
 
-    @patch("src.download.ping_mirror", return_value=True)
-    @patch("src.download.fetch_html")
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.fetch_html")
     def test_fedora_empty_root(self, mock_fetch_html: MagicMock, mock_ping: MagicMock):
         _section("Strategy: fedora_nested — Empty Root")
         mock_fetch_html.return_value = ""
@@ -394,7 +394,7 @@ class TestProcessScrapingStrategy(unittest.TestCase):
         self.assertEqual(url, "")
         _ok("Empty strings returned on empty root HTML")
 
-    @patch("src.download.ping_mirror", return_value=False)
+    @patch("visync.download.ping_mirror", return_value=False)
     def test_ping_failure_skips_mirror(self, mock_ping: MagicMock):
         _section("Strategy: ping failure short-circuits")
         settings = {
@@ -408,8 +408,8 @@ class TestProcessScrapingStrategy(unittest.TestCase):
         mock_ping.assert_called_once()
         _ok("Ping failure returns empty without fetching")
 
-    @patch("src.download.ping_mirror", return_value=True)
-    @patch("src.download.fetch_html")
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.fetch_html")
     def test_fedora_dl_real_listing(
         self, mock_fetch_html: MagicMock, mock_ping: MagicMock
     ):
@@ -433,8 +433,8 @@ class TestProcessScrapingStrategy(unittest.TestCase):
         self.assertIn("43/Workstation/x86_64/iso/", url)
         _ok(f"Resolved from real-style listing: {name}")
 
-    @patch("src.download.ping_mirror", return_value=True)
-    @patch("src.download.fetch_html")
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.fetch_html")
     def test_fedora_arm_aarch64_tree(
         self, mock_fetch_html: MagicMock, mock_ping: MagicMock
     ):
@@ -459,7 +459,7 @@ class TestProcessScrapingStrategy(unittest.TestCase):
         self.assertIn("/Workstation/aarch64/iso/", url)
         _ok(f"aarch64 ISO resolved: {name}")
 
-    @patch("src.download.ping_mirror", return_value=True)
+    @patch("visync.download.ping_mirror", return_value=True)
     def test_unknown_strategy(self, mock_ping: MagicMock):
         _section("Strategy: Unknown / Unrecognized")
         settings = {"strategy": "custom_strategy", "base_url": "https://example.com/"}
@@ -501,8 +501,8 @@ class TestDownloadIso(unittest.TestCase):
             read_data=[data, b""],
         )
 
-    @patch("src.download.urllib.request.urlopen")
-    @patch("src.download.urllib.request.Request")
+    @patch("visync.download.urllib.request.urlopen")
+    @patch("visync.download.urllib.request.Request")
     def test_download_success(self, mock_request: MagicMock, mock_urlopen: MagicMock):
         _section("download_iso: Successful Download")
         head_resp = self._mock_head_response(content_length="500")
@@ -516,8 +516,8 @@ class TestDownloadIso(unittest.TestCase):
             self.assertEqual(dest.read_bytes(), b"x" * 500)
             _ok(f"Wrote {len(dest.read_bytes())} bytes to {dest.name}")
 
-    @patch("src.download.urllib.request.urlopen")
-    @patch("src.download.urllib.request.Request")
+    @patch("visync.download.urllib.request.urlopen")
+    @patch("visync.download.urllib.request.Request")
     def test_download_failure_cleans_part(
         self, mock_request: MagicMock, mock_urlopen: MagicMock
     ):
@@ -533,8 +533,8 @@ class TestDownloadIso(unittest.TestCase):
             self.assertFalse(part_file.exists())
             _ok("Neither .iso nor .part remain after failure")
 
-    @patch("src.download.urllib.request.urlopen")
-    @patch("src.download.urllib.request.Request")
+    @patch("visync.download.urllib.request.urlopen")
+    @patch("visync.download.urllib.request.Request")
     def test_download_oserror_cleans_part(
         self, mock_request: MagicMock, mock_urlopen: MagicMock
     ):
@@ -549,8 +549,8 @@ class TestDownloadIso(unittest.TestCase):
             self.assertFalse(dest.with_suffix(".iso.part").exists())
             _ok("OSError triggers .part cleanup")
 
-    @patch("src.download.urllib.request.urlopen")
-    @patch("src.download.urllib.request.Request")
+    @patch("visync.download.urllib.request.urlopen")
+    @patch("visync.download.urllib.request.Request")
     def test_download_disk_full_skips(
         self, mock_request: MagicMock, mock_urlopen: MagicMock
     ):
@@ -564,9 +564,9 @@ class TestDownloadIso(unittest.TestCase):
             self.assertFalse(dest.exists())
             _ok("Download skipped when disk space insufficient")
 
-    @patch("src.verify.verify_from_config")
-    @patch("src.download.urllib.request.urlopen")
-    @patch("src.download.urllib.request.Request")
+    @patch("visync.verify.verify_from_config")
+    @patch("visync.download.urllib.request.urlopen")
+    @patch("visync.download.urllib.request.Request")
     def test_download_auto_verify_success(
         self, mock_request: MagicMock, mock_urlopen: MagicMock, mock_verify: MagicMock
     ):
@@ -591,9 +591,9 @@ class TestDownloadIso(unittest.TestCase):
             mock_verify.assert_called_once()
             _ok("Checksum verified after download")
 
-    @patch("src.verify.verify_from_config")
-    @patch("src.download.urllib.request.urlopen")
-    @patch("src.download.urllib.request.Request")
+    @patch("visync.verify.verify_from_config")
+    @patch("visync.download.urllib.request.urlopen")
+    @patch("visync.download.urllib.request.Request")
     def test_download_auto_verify_failure_deletes(
         self, mock_request: MagicMock, mock_urlopen: MagicMock, mock_verify: MagicMock
     ):
@@ -617,9 +617,9 @@ class TestDownloadIso(unittest.TestCase):
             self.assertFalse(dest.exists())
             _ok("File deleted after checksum failure")
 
-    @patch("src.verify.verify_from_config")
-    @patch("src.download.urllib.request.urlopen")
-    @patch("src.download.urllib.request.Request")
+    @patch("visync.verify.verify_from_config")
+    @patch("visync.download.urllib.request.urlopen")
+    @patch("visync.download.urllib.request.Request")
     def test_download_no_checksum_config_skips(
         self, mock_request: MagicMock, mock_urlopen: MagicMock, mock_verify: MagicMock
     ):
@@ -645,8 +645,8 @@ class TestDownloadIso(unittest.TestCase):
 
 
 class TestCheckDistro(unittest.TestCase):
-    @patch("src.download.find_installed_isos")
-    @patch("src.download.process_scraping_strategy")
+    @patch("visync.download.find_installed_isos")
+    @patch("visync.download.process_scraping_strategy")
     def test_returns_download_when_newer(
         self, mock_scrape: MagicMock, mock_find: MagicMock
     ):
@@ -663,8 +663,8 @@ class TestCheckDistro(unittest.TestCase):
         self.assertIsNotNone(result.download_url)
         _ok("Correctly identifies new version available")
 
-    @patch("src.download.find_installed_isos")
-    @patch("src.download.process_scraping_strategy")
+    @patch("visync.download.find_installed_isos")
+    @patch("visync.download.process_scraping_strategy")
     def test_returns_up_to_date(self, mock_scrape: MagicMock, mock_find: MagicMock):
         _section("_check_distro: Already Up to Date")
         mock_scrape.return_value = (
@@ -678,8 +678,8 @@ class TestCheckDistro(unittest.TestCase):
         self.assertIs(result.status, SyncStatus.CURRENT)
         _ok("Correctly skips when version matches")
 
-    @patch("src.download.find_installed_isos")
-    @patch("src.download.process_scraping_strategy")
+    @patch("visync.download.find_installed_isos")
+    @patch("visync.download.process_scraping_strategy")
     def test_force_skips_version_check(
         self, mock_scrape: MagicMock, mock_find: MagicMock
     ):
@@ -696,8 +696,8 @@ class TestCheckDistro(unittest.TestCase):
         self.assertIsNotNone(result.download_url)
         _ok("--force correctly bypasses version check")
 
-    @patch("src.download.find_installed_isos", return_value=[])
-    @patch("src.download.process_scraping_strategy", return_value=("", ""))
+    @patch("visync.download.find_installed_isos", return_value=[])
+    @patch("visync.download.process_scraping_strategy", return_value=("", ""))
     def test_unreachable_when_scrape_fails(self, _mock_scrape, _mock_find):
         """A mirror we cannot read must be UNREACHABLE, never CURRENT."""
         _section("_check_distro: Unreachable mirror")
@@ -710,9 +710,9 @@ class TestCheckDistro(unittest.TestCase):
 
 
 class TestCleanupOldVersions(unittest.TestCase):
-    @patch("src.download.identify_distro")
-    @patch("src.download.get_iso_volume_id")
-    @patch("src.download.find_installed_isos")
+    @patch("visync.download.identify_distro")
+    @patch("visync.download.get_iso_volume_id")
+    @patch("visync.download.find_installed_isos")
     def test_removes_same_distro_same_stem(
         self, mock_find: MagicMock, mock_vid: MagicMock, mock_id: MagicMock
     ):
@@ -734,9 +734,9 @@ class TestCleanupOldVersions(unittest.TestCase):
             self.assertTrue(new_iso.exists())
             _ok("Old file removed, new file preserved")
 
-    @patch("src.download.identify_distro")
-    @patch("src.download.get_iso_volume_id")
-    @patch("src.download.find_installed_isos")
+    @patch("visync.download.identify_distro")
+    @patch("visync.download.get_iso_volume_id")
+    @patch("visync.download.find_installed_isos")
     def test_preserves_different_variant(
         self, mock_find: MagicMock, mock_vid: MagicMock, mock_id: MagicMock
     ):
@@ -812,8 +812,8 @@ class TestNixosChecksumParsing(unittest.TestCase):
         }
         # Mock fetch_html to return our canned HTML
         with (
-            patch("src.download.fetch_html", return_value=self.NIXOS_HTML),
-            patch("src.download.urllib.request.urlopen") as mock_urlopen,
+            patch("visync.download.fetch_html", return_value=self.NIXOS_HTML),
+            patch("visync.download.urllib.request.urlopen") as mock_urlopen,
         ):
             mock_resp = MagicMock()
             mock_resp.status = 200
@@ -841,8 +841,8 @@ class TestNixosChecksumParsing(unittest.TestCase):
             "variant": "graphical",
         }
         with (
-            patch("src.download.fetch_html", return_value=self.NIXOS_HTML),
-            patch("src.download.urllib.request.urlopen") as mock_urlopen,
+            patch("visync.download.fetch_html", return_value=self.NIXOS_HTML),
+            patch("visync.download.urllib.request.urlopen") as mock_urlopen,
         ):
             mock_resp = MagicMock()
             mock_resp.status = 200
@@ -866,7 +866,7 @@ class TestNixosChecksumParsing(unittest.TestCase):
             "base_url": "https://channels.nixos.org/nixos-26.05",
             "variant": "minimal",
         }
-        with patch("src.download.fetch_html", return_value="<html></html>"):
+        with patch("visync.download.fetch_html", return_value="<html></html>"):
             filename, _url = process_scraping_strategy("NixOS Minimal", settings)
 
         self.assertEqual(filename, "")
@@ -880,7 +880,7 @@ class TestChunkedDownload(unittest.TestCase):
     def test_chunked_download_writes_correct_data(self) -> None:
         """_download_chunked should write all bytes at correct offsets."""
         _section("Chunked download: parallel range writes")
-        from src.download import _download_chunked
+        from visync.download import _download_chunked
 
         # 1 MiB of known data
         data = os.urandom(1024 * 1024)

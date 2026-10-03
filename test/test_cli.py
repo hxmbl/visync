@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from typer.testing import CliRunner
 
-from src.main import _get_drives, app
+from visync.main import _get_drives, app
 
 runner = CliRunner()
 
@@ -59,16 +59,16 @@ def _mock_identify_distro(vid: str, filename: str) -> str:
 
 
 class TestInstall(unittest.TestCase):
-    @patch("src.main.find_ventoy_drives", return_value=[])
-    @patch("src.main.load_config")
+    @patch("visync.main.find_ventoy_drives", return_value=[])
+    @patch("visync.main.load_config")
     def test_install_requires_name_or_file(self, *_: MagicMock) -> None:
         result = runner.invoke(app, ["install"])
         self.assertNotEqual(result.exit_code, 0)
 
-    @patch("src.main.identify_distro", side_effect=_mock_identify_distro)
-    @patch("src.main.get_iso_volume_id", side_effect=_mock_get_vid)
-    @patch("src.main.find_installed_isos", side_effect=_mock_find_installed)
-    @patch("src.main.load_config")
+    @patch("visync.main.identify_distro", side_effect=_mock_identify_distro)
+    @patch("visync.main.get_iso_volume_id", side_effect=_mock_get_vid)
+    @patch("visync.main.find_installed_isos", side_effect=_mock_find_installed)
+    @patch("visync.main.load_config")
     def test_install_unknown_distro_fails(
         self, mock_cfg: MagicMock, *_: MagicMock
     ) -> None:
@@ -78,11 +78,11 @@ class TestInstall(unittest.TestCase):
             self.assertNotEqual(result.exit_code, 0)
             self.assertIn("Unknown distro", result.stdout)
 
-    @patch("src.main.find_installed_isos", side_effect=_mock_find_installed)
+    @patch("visync.main.find_installed_isos", side_effect=_mock_find_installed)
     def test_install_dry_run_does_not_download(self, _mock: MagicMock) -> None:
         with (
             tempfile.TemporaryDirectory() as tmpdir,
-            patch("src.main.load_config", return_value=MOCK_CONFIG),
+            patch("visync.main.load_config", return_value=MOCK_CONFIG),
         ):
             result = runner.invoke(
                 app, ["install", "archlinux", "--drive", tmpdir, "--dry-run"]
@@ -91,8 +91,8 @@ class TestInstall(unittest.TestCase):
             self.assertIn("Would download", result.stdout)
             self.assertEqual(list(Path(tmpdir).glob("*.iso")), [])
 
-    @patch("src.main.find_installed_isos", side_effect=_mock_find_installed)
-    @patch("src.main.load_config")
+    @patch("visync.main.find_installed_isos", side_effect=_mock_find_installed)
+    @patch("visync.main.load_config")
     def test_install_ambiguous_query_lists_candidates(
         self, mock_cfg: MagicMock, _mock: MagicMock
     ) -> None:
@@ -105,15 +105,15 @@ class TestInstall(unittest.TestCase):
             self.assertIn("Arch Linux", result.stdout)
             self.assertIn("Ubuntu Server", result.stdout)
 
-    @patch("src.main.find_installed_isos", side_effect=_mock_find_installed)
-    @patch("src.main.load_config")
+    @patch("visync.main.find_installed_isos", side_effect=_mock_find_installed)
+    @patch("visync.main.load_config")
     def test_install_dry_run_creates_no_staging_dir(
         self, mock_cfg: MagicMock, _mock: MagicMock
     ) -> None:
         """--dry-run must not create the staging cache directory."""
         mock_cfg.return_value = MOCK_CONFIG
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("src.main.Path.home", return_value=Path(tmpdir)):
+            with patch("visync.main.Path.home", return_value=Path(tmpdir)):
                 result = runner.invoke(
                     app, ["install", "archlinux", "--drive", tmpdir, "--dry-run"]
                 )
@@ -121,11 +121,11 @@ class TestInstall(unittest.TestCase):
                 self.assertIn("Would download", result.stdout)
             self.assertFalse((Path(tmpdir) / ".cache" / "visync" / "staging").exists())
 
-    @patch("src.pm.mark_installed")
-    @patch("src.main.identify_distro", side_effect=_mock_identify_distro)
-    @patch("src.main.get_iso_volume_id", side_effect=_mock_get_vid)
-    @patch("src.main.find_installed_isos", side_effect=_mock_find_installed)
-    @patch("src.main.load_config")
+    @patch("visync.pm.mark_installed")
+    @patch("visync.main.identify_distro", side_effect=_mock_identify_distro)
+    @patch("visync.main.get_iso_volume_id", side_effect=_mock_get_vid)
+    @patch("visync.main.find_installed_isos", side_effect=_mock_find_installed)
+    @patch("visync.main.load_config")
     def test_install_already_on_drive(self, mock_cfg: MagicMock, *_: MagicMock) -> None:
         mock_cfg.return_value = MOCK_CONFIG
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -135,10 +135,10 @@ class TestInstall(unittest.TestCase):
             self.assertEqual(result.exit_code, 0)
             self.assertIn("already on the drive", result.stdout)
 
-    @patch("src.main.identify_distro", side_effect=_mock_identify_distro)
-    @patch("src.main.get_iso_volume_id", side_effect=_mock_get_vid)
-    @patch("src.main.find_installed_isos", side_effect=_mock_find_installed)
-    @patch("src.main.load_config")
+    @patch("visync.main.identify_distro", side_effect=_mock_identify_distro)
+    @patch("visync.main.get_iso_volume_id", side_effect=_mock_get_vid)
+    @patch("visync.main.find_installed_isos", side_effect=_mock_find_installed)
+    @patch("visync.main.load_config")
     def test_install_dry_run_leaves_state_file_untouched(
         self, mock_cfg: MagicMock, *_: MagicMock
     ) -> None:
@@ -173,12 +173,12 @@ class TestInstall(unittest.TestCase):
             self.assertNotEqual(result.exit_code, 0)
             self.assertIn("File not found", result.stdout)
 
-    @patch("src.main.find_installed_isos", side_effect=_mock_find_installed)
+    @patch("visync.main.find_installed_isos", side_effect=_mock_find_installed)
     def test_install_file_with_comments_and_blanks(self, _mock: MagicMock) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             pkg_file = Path(tmpdir) / "packages.txt"
             pkg_file.write_text("# comment\n\narchlinux\n\n# another comment\n")
-            with patch("src.main.load_config", return_value=MOCK_CONFIG):
+            with patch("visync.main.load_config", return_value=MOCK_CONFIG):
                 result = runner.invoke(
                     app,
                     ["install", "-i", str(pkg_file), "--drive", tmpdir, "--dry-run"],
@@ -186,12 +186,12 @@ class TestInstall(unittest.TestCase):
                 self.assertEqual(result.exit_code, 0)
                 self.assertIn("Would download 1 distro(s)", result.stdout)
 
-    @patch("src.main.find_installed_isos", side_effect=_mock_find_installed)
+    @patch("visync.main.find_installed_isos", side_effect=_mock_find_installed)
     def test_install_file_multiple_distros(self, _mock: MagicMock) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             pkg_file = Path(tmpdir) / "packages.txt"
             pkg_file.write_text("archlinux\nubuntuserver\n")
-            with patch("src.main.load_config", return_value=MOCK_CONFIG):
+            with patch("visync.main.load_config", return_value=MOCK_CONFIG):
                 result = runner.invoke(
                     app,
                     ["install", "-i", str(pkg_file), "--drive", tmpdir, "--dry-run"],
@@ -199,12 +199,12 @@ class TestInstall(unittest.TestCase):
                 self.assertEqual(result.exit_code, 0)
                 self.assertIn("Would download 2 distro(s)", result.stdout)
 
-    @patch("src.main.find_installed_isos", side_effect=_mock_find_installed)
+    @patch("visync.main.find_installed_isos", side_effect=_mock_find_installed)
     def test_install_file_no_valid_distros(self, _mock: MagicMock) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             pkg_file = Path(tmpdir) / "packages.txt"
             pkg_file.write_text("bogus1\nbogus2\n")
-            with patch("src.main.load_config", return_value=MOCK_CONFIG):
+            with patch("visync.main.load_config", return_value=MOCK_CONFIG):
                 result = runner.invoke(
                     app, ["install", "-i", str(pkg_file), "--drive", tmpdir]
                 )
@@ -221,10 +221,10 @@ class TestInstall(unittest.TestCase):
 
 
 class TestRemove(unittest.TestCase):
-    @patch("src.main.identify_distro", side_effect=_mock_identify_distro)
-    @patch("src.main.get_iso_volume_id", side_effect=_mock_get_vid)
-    @patch("src.main.find_installed_isos", side_effect=_mock_find_installed)
-    @patch("src.main.load_config")
+    @patch("visync.main.identify_distro", side_effect=_mock_identify_distro)
+    @patch("visync.main.get_iso_volume_id", side_effect=_mock_get_vid)
+    @patch("visync.main.find_installed_isos", side_effect=_mock_find_installed)
+    @patch("visync.main.load_config")
     def test_remove_unknown_distro_fails(
         self, mock_cfg: MagicMock, *_: MagicMock
     ) -> None:
@@ -234,10 +234,10 @@ class TestRemove(unittest.TestCase):
             self.assertNotEqual(result.exit_code, 0)
             self.assertIn("Unknown distro", result.stdout)
 
-    @patch("src.main.identify_distro", side_effect=_mock_identify_distro)
-    @patch("src.main.get_iso_volume_id", side_effect=_mock_get_vid)
-    @patch("src.main.find_installed_isos", side_effect=_mock_find_installed)
-    @patch("src.main.load_config")
+    @patch("visync.main.identify_distro", side_effect=_mock_identify_distro)
+    @patch("visync.main.get_iso_volume_id", side_effect=_mock_get_vid)
+    @patch("visync.main.find_installed_isos", side_effect=_mock_find_installed)
+    @patch("visync.main.load_config")
     def test_remove_no_files_warns(self, mock_cfg: MagicMock, *_: MagicMock) -> None:
         mock_cfg.return_value = MOCK_CONFIG
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -245,10 +245,10 @@ class TestRemove(unittest.TestCase):
             self.assertEqual(result.exit_code, 0)
             self.assertIn("No files found", result.stdout)
 
-    @patch("src.main.identify_distro", side_effect=_mock_identify_distro)
-    @patch("src.main.get_iso_volume_id", side_effect=_mock_get_vid)
-    @patch("src.main.find_installed_isos", side_effect=_mock_find_installed)
-    @patch("src.main.load_config")
+    @patch("visync.main.identify_distro", side_effect=_mock_identify_distro)
+    @patch("visync.main.get_iso_volume_id", side_effect=_mock_get_vid)
+    @patch("visync.main.find_installed_isos", side_effect=_mock_find_installed)
+    @patch("visync.main.load_config")
     def test_remove_dry_run_does_not_delete(
         self, mock_cfg: MagicMock, *_: MagicMock
     ) -> None:
@@ -263,12 +263,12 @@ class TestRemove(unittest.TestCase):
             self.assertIn("Would remove", result.stdout)
             self.assertTrue(iso.exists(), "File should still exist after dry-run")
 
-    @patch("src.finder.remove_iso_metadata")
-    @patch("src.pm.mark_removed")
-    @patch("src.main.identify_distro", side_effect=_mock_identify_distro)
-    @patch("src.main.get_iso_volume_id", side_effect=_mock_get_vid)
-    @patch("src.main.find_installed_isos", side_effect=_mock_find_installed)
-    @patch("src.main.load_config")
+    @patch("visync.finder.remove_iso_metadata")
+    @patch("visync.pm.mark_removed")
+    @patch("visync.main.identify_distro", side_effect=_mock_identify_distro)
+    @patch("visync.main.get_iso_volume_id", side_effect=_mock_get_vid)
+    @patch("visync.main.find_installed_isos", side_effect=_mock_find_installed)
+    @patch("visync.main.load_config")
     def test_remove_deletes_file(self, mock_cfg: MagicMock, *_: MagicMock) -> None:
         mock_cfg.return_value = MOCK_CONFIG
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -281,10 +281,10 @@ class TestRemove(unittest.TestCase):
             self.assertFalse(iso.exists(), "File should be deleted")
             self.assertIn("removed", result.stdout)
 
-    @patch("src.main.identify_distro", side_effect=_mock_identify_distro)
-    @patch("src.main.get_iso_volume_id", side_effect=_mock_get_vid)
-    @patch("src.main.find_installed_isos", side_effect=_mock_find_installed)
-    @patch("src.main.load_config")
+    @patch("visync.main.identify_distro", side_effect=_mock_identify_distro)
+    @patch("visync.main.get_iso_volume_id", side_effect=_mock_get_vid)
+    @patch("visync.main.find_installed_isos", side_effect=_mock_find_installed)
+    @patch("visync.main.load_config")
     def test_remove_requires_confirmation_without_yes(
         self, mock_cfg: MagicMock, *_: MagicMock
     ) -> None:
@@ -298,10 +298,10 @@ class TestRemove(unittest.TestCase):
             self.assertNotEqual(result.exit_code, 0)
             self.assertTrue(iso.exists(), "File must survive aborted confirmation")
 
-    @patch("src.main.identify_distro", side_effect=_mock_identify_distro)
-    @patch("src.main.get_iso_volume_id", side_effect=_mock_get_vid)
-    @patch("src.main.find_installed_isos", side_effect=_mock_find_installed)
-    @patch("src.main.load_config")
+    @patch("visync.main.identify_distro", side_effect=_mock_identify_distro)
+    @patch("visync.main.get_iso_volume_id", side_effect=_mock_get_vid)
+    @patch("visync.main.find_installed_isos", side_effect=_mock_find_installed)
+    @patch("visync.main.load_config")
     def test_remove_confirm_no_keeps_file(
         self, mock_cfg: MagicMock, *_: MagicMock
     ) -> None:
@@ -317,10 +317,10 @@ class TestRemove(unittest.TestCase):
             self.assertTrue(iso.exists())
             self.assertIn("nothing deleted", result.stdout)
 
-    @patch("src.main.identify_distro", side_effect=_mock_identify_distro)
-    @patch("src.main.get_iso_volume_id", side_effect=_mock_get_vid)
-    @patch("src.main.find_installed_isos", side_effect=_mock_find_installed)
-    @patch("src.main.load_config")
+    @patch("visync.main.identify_distro", side_effect=_mock_identify_distro)
+    @patch("visync.main.get_iso_volume_id", side_effect=_mock_get_vid)
+    @patch("visync.main.find_installed_isos", side_effect=_mock_find_installed)
+    @patch("visync.main.load_config")
     def test_remove_ambiguous_query_fails(
         self, mock_cfg: MagicMock, *_: MagicMock
     ) -> None:
@@ -343,12 +343,12 @@ class TestRemove(unittest.TestCase):
 
 
 class TestUpdate(unittest.TestCase):
-    @patch("src.main.find_ventoy_drives", return_value=[Path("/tmp")])
-    @patch("src.main.load_config")
+    @patch("visync.main.find_ventoy_drives", return_value=[Path("/tmp")])
+    @patch("visync.main.load_config")
     def test_update_no_installed(self, *_: MagicMock) -> None:
         with (
             tempfile.TemporaryDirectory() as tmpdir,
-            patch("src.main.find_ventoy_drives", return_value=[Path(tmpdir)]),
+            patch("visync.main.find_ventoy_drives", return_value=[Path(tmpdir)]),
         ):
             result = runner.invoke(app, ["update"])
             self.assertEqual(result.exit_code, 0)
@@ -359,7 +359,7 @@ class TestUpdate(unittest.TestCase):
         for flag in ["--config", "--drive", "--force", "--clean", "--dry-run"]:
             self.assertIn(flag, result.stdout, f"update missing {flag}")
 
-    @patch("src.main.load_config")
+    @patch("visync.main.load_config")
     def test_update_unknown_distro_fails(self, mock_cfg: MagicMock) -> None:
         mock_cfg.return_value = MOCK_CONFIG
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -372,26 +372,26 @@ class TestUpdate(unittest.TestCase):
 
 
 class TestSearch(unittest.TestCase):
-    @patch("src.pm.get_installed_ids", return_value=[])
-    @patch("src.main.find_ventoy_drives", return_value=[Path("/tmp")])
-    @patch("src.main.load_config", return_value=MOCK_CONFIG)
+    @patch("visync.pm.get_installed_ids", return_value=[])
+    @patch("visync.main.find_ventoy_drives", return_value=[Path("/tmp")])
+    @patch("visync.main.load_config", return_value=MOCK_CONFIG)
     def test_search_lists_distros(self, *_: MagicMock) -> None:
         result = runner.invoke(app, ["search"])
         self.assertEqual(result.exit_code, 0)
         self.assertIn("Arch Linux", result.stdout)
         self.assertIn("Ubuntu Server", result.stdout)
 
-    @patch("src.pm.get_installed_ids", return_value=[])
-    @patch("src.main.find_ventoy_drives", return_value=[Path("/tmp")])
-    @patch("src.main.load_config", return_value=MOCK_CONFIG)
+    @patch("visync.pm.get_installed_ids", return_value=[])
+    @patch("visync.main.find_ventoy_drives", return_value=[Path("/tmp")])
+    @patch("visync.main.load_config", return_value=MOCK_CONFIG)
     def test_search_by_query(self, *_: MagicMock) -> None:
         result = runner.invoke(app, ["search", "archlinux"])
         self.assertEqual(result.exit_code, 0)
         self.assertIn("Arch Linux", result.stdout)
 
-    @patch("src.pm.get_installed_ids", return_value=[])
-    @patch("src.main.find_ventoy_drives", return_value=[Path("/tmp")])
-    @patch("src.main.load_config", return_value=MOCK_CONFIG)
+    @patch("visync.pm.get_installed_ids", return_value=[])
+    @patch("visync.main.find_ventoy_drives", return_value=[Path("/tmp")])
+    @patch("visync.main.load_config", return_value=MOCK_CONFIG)
     def test_search_no_match(self, *_: MagicMock) -> None:
         result = runner.invoke(app, ["search", "bogus"])
         self.assertIn("No match", result.stdout)
@@ -401,7 +401,7 @@ class TestSearch(unittest.TestCase):
         self.assertIn("--config", result.stdout)
         self.assertIn("--drive", result.stdout)
 
-    @patch("src.main.load_config", return_value={"distros": {}})
+    @patch("visync.main.load_config", return_value={"distros": {}})
     def test_search_no_distros_configured(self, _mock: MagicMock) -> None:
         result = runner.invoke(app, ["search"])
         self.assertEqual(result.exit_code, 0)
@@ -416,17 +416,17 @@ class TestSearch(unittest.TestCase):
 
 
 class TestInfo(unittest.TestCase):
-    @patch("src.pm.get_installed_ids", return_value=[])
-    @patch("src.main.find_ventoy_drives", return_value=[Path("/tmp")])
-    @patch("src.main.load_config", return_value=MOCK_CONFIG)
+    @patch("visync.pm.get_installed_ids", return_value=[])
+    @patch("visync.main.find_ventoy_drives", return_value=[Path("/tmp")])
+    @patch("visync.main.load_config", return_value=MOCK_CONFIG)
     def test_info_shows_details(self, *_: MagicMock) -> None:
         result = runner.invoke(app, ["info", "archlinux"])
         self.assertEqual(result.exit_code, 0)
         self.assertIn("Arch Linux", result.stdout)
         self.assertIn("strategy:", result.stdout)
 
-    @patch("src.main.find_ventoy_drives", return_value=[Path("/tmp")])
-    @patch("src.main.load_config", return_value=MOCK_CONFIG)
+    @patch("visync.main.find_ventoy_drives", return_value=[Path("/tmp")])
+    @patch("visync.main.load_config", return_value=MOCK_CONFIG)
     def test_info_unknown_distro_fails(self, *_: MagicMock) -> None:
         result = runner.invoke(app, ["info", "bogus-distro"])
         self.assertNotEqual(result.exit_code, 0)
@@ -446,8 +446,8 @@ class TestInfo(unittest.TestCase):
 
 
 class TestAutodetect(unittest.TestCase):
-    @patch("src.pm.get_installed_ids", return_value=[])
-    @patch("src.main.load_config")
+    @patch("visync.pm.get_installed_ids", return_value=[])
+    @patch("visync.main.load_config")
     def test_autodetect_no_files(self, mock_cfg: MagicMock, *_: MagicMock) -> None:
         mock_cfg.return_value = MOCK_CONFIG
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -455,26 +455,28 @@ class TestAutodetect(unittest.TestCase):
             self.assertEqual(result.exit_code, 0)
             self.assertIn("No new distros detected", result.stdout)
 
-    @patch("src.pm.get_installed_ids", return_value=[])
-    @patch("src.pm.mark_installed")
-    @patch("src.main.load_config")
+    @patch("visync.pm.get_installed_ids", return_value=[])
+    @patch("visync.pm.mark_installed")
+    @patch("visync.main.load_config")
     def test_autodetect_dry_run(self, mock_cfg: MagicMock, *_: MagicMock) -> None:
         mock_cfg.return_value = MOCK_CONFIG
         with tempfile.TemporaryDirectory() as tmpdir:
             iso = Path(tmpdir) / "archlinux-2026.iso"
             iso.write_bytes(b"\x00" * 1024)
-            with patch("src.main.identify_distro", side_effect=_mock_identify_distro):
+            with patch(
+                "visync.main.identify_distro", side_effect=_mock_identify_distro
+            ):
                 result = runner.invoke(
                     app, ["autodetect", "--drive", tmpdir, "--dry-run"]
                 )
                 self.assertEqual(result.exit_code, 0)
                 self.assertIn("Would detect", result.stdout)
 
-    @patch("src.pm.get_installed_ids", return_value=[])
-    @patch("src.pm.mark_installed")
-    @patch("src.main.extract_version_from_filename", return_value="2026")
-    @patch("src.main.identify_distro", side_effect=_mock_identify_distro)
-    @patch("src.main.load_config")
+    @patch("visync.pm.get_installed_ids", return_value=[])
+    @patch("visync.pm.mark_installed")
+    @patch("visync.main.extract_version_from_filename", return_value="2026")
+    @patch("visync.main.identify_distro", side_effect=_mock_identify_distro)
+    @patch("visync.main.load_config")
     def test_autodetect_registers_iso(self, mock_cfg: MagicMock, *_: MagicMock) -> None:
         mock_cfg.return_value = MOCK_CONFIG
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -484,9 +486,9 @@ class TestAutodetect(unittest.TestCase):
             self.assertEqual(result.exit_code, 0)
             self.assertIn("Detected", result.stdout)
 
-    @patch("src.pm.get_installed_ids", return_value=["ArchLinux"])
-    @patch("src.pm.mark_installed")
-    @patch("src.main.load_config")
+    @patch("visync.pm.get_installed_ids", return_value=["ArchLinux"])
+    @patch("visync.pm.mark_installed")
+    @patch("visync.main.load_config")
     def test_autodetect_skips_already_registered(
         self, mock_cfg: MagicMock, *_: MagicMock
     ) -> None:
@@ -495,7 +497,9 @@ class TestAutodetect(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             iso = Path(tmpdir) / "archlinux-2026.iso"
             iso.write_bytes(b"\x00" * 1024)
-            with patch("src.main.identify_distro", side_effect=_mock_identify_distro):
+            with patch(
+                "visync.main.identify_distro", side_effect=_mock_identify_distro
+            ):
                 result = runner.invoke(app, ["autodetect", "--drive", tmpdir])
                 self.assertEqual(result.exit_code, 0)
                 self.assertIn("No new distros detected", result.stdout)
@@ -520,7 +524,7 @@ class TestList(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             iso = Path(tmpdir) / "archlinux-2026.iso"
             iso.write_bytes(b"\x00" * (1024 * 1024))
-            with patch("src.main.load_all_metadata", return_value={}):
+            with patch("visync.main.load_all_metadata", return_value={}):
                 result = runner.invoke(app, ["list", "--drive", tmpdir])
                 self.assertEqual(result.exit_code, 0)
                 self.assertIn("archlinux-2026.iso", result.stdout)
@@ -539,12 +543,12 @@ class TestList(unittest.TestCase):
 
 
 class TestSync(unittest.TestCase):
-    @patch("src.main.find_ventoy_drives", return_value=[Path("/tmp")])
-    @patch("src.main.load_config", return_value=MOCK_CONFIG)
+    @patch("visync.main.find_ventoy_drives", return_value=[Path("/tmp")])
+    @patch("visync.main.load_config", return_value=MOCK_CONFIG)
     def test_sync_no_installed(self, *_: MagicMock) -> None:
         with (
             tempfile.TemporaryDirectory() as tmpdir,
-            patch("src.main.find_ventoy_drives", return_value=[Path(tmpdir)]),
+            patch("visync.main.find_ventoy_drives", return_value=[Path(tmpdir)]),
         ):
             result = runner.invoke(app, ["sync"])
             self.assertEqual(result.exit_code, 0)
@@ -774,7 +778,7 @@ class TestGetDrives(unittest.TestCase):
         """With one detected drive, returns it without prompting."""
         with (
             tempfile.TemporaryDirectory() as tmpdir,
-            patch("src.main.find_ventoy_drives", return_value=[Path(tmpdir)]),
+            patch("visync.main.find_ventoy_drives", return_value=[Path(tmpdir)]),
         ):
             result = _get_drives()
             self.assertEqual(result, [Path(tmpdir)])
@@ -790,50 +794,50 @@ class TestGetDrives(unittest.TestCase):
         with self.assertRaises(typer.Exit):
             _get_drives(drives=[Path("/nonexistent/path")])
 
-    @patch("src.main.find_ventoy_drives")
+    @patch("visync.main.find_ventoy_drives")
     def test_multiple_drives_prompts_user(self, mock_drives: MagicMock) -> None:
         """With multiple drives, prompts user to select."""
         with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
             mock_drives.return_value = [Path(d1), Path(d2)]
             # Simulate user entering "1"
-            with patch("src.main.typer.prompt", return_value="1"):
+            with patch("visync.main.typer.prompt", return_value="1"):
                 result = _get_drives()
                 self.assertEqual(result, [Path(d1)])
 
-    @patch("src.main.find_ventoy_drives")
+    @patch("visync.main.find_ventoy_drives")
     def test_multiple_drives_second_choice(self, mock_drives: MagicMock) -> None:
         """With multiple drives, user can select the second one."""
         with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
             mock_drives.return_value = [Path(d1), Path(d2)]
-            with patch("src.main.typer.prompt", return_value="2"):
+            with patch("visync.main.typer.prompt", return_value="2"):
                 result = _get_drives()
                 self.assertEqual(result, [Path(d2)])
 
-    @patch("src.main.find_ventoy_drives")
+    @patch("visync.main.find_ventoy_drives")
     def test_multiple_drives_select_multiple(self, mock_drives: MagicMock) -> None:
         """With multiple drives, user can select more than one."""
         with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
             mock_drives.return_value = [Path(d1), Path(d2)]
-            with patch("src.main.typer.prompt", return_value="1,2"):
+            with patch("visync.main.typer.prompt", return_value="1,2"):
                 result = _get_drives()
                 self.assertEqual(result, [Path(d1), Path(d2)])
 
-    @patch("src.main.find_ventoy_drives")
+    @patch("visync.main.find_ventoy_drives")
     def test_multiple_drives_retries_on_invalid(self, mock_drives: MagicMock) -> None:
         """Invalid selection retries prompt until valid."""
         with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
             mock_drives.return_value = [Path(d1), Path(d2)]
             # First call returns invalid ("0"), second returns valid ("1")
-            with patch("src.main.typer.prompt", side_effect=["0", "1"]):
+            with patch("visync.main.typer.prompt", side_effect=["0", "1"]):
                 result = _get_drives()
                 self.assertEqual(result, [Path(d1)])
 
-    @patch("src.main.find_ventoy_drives")
+    @patch("visync.main.find_ventoy_drives")
     def test_multiple_drives_abort_exits(self, mock_drives: MagicMock) -> None:
         """User abort (Ctrl+C) during prompt exits cleanly."""
         mock_drives.return_value = [Path("/tmp/a"), Path("/tmp/b")]
         with (
-            patch("src.main.typer.prompt", side_effect=typer.Abort()),
+            patch("visync.main.typer.prompt", side_effect=typer.Abort()),
             self.assertRaises(typer.Exit),
         ):
             _get_drives()
@@ -841,7 +845,7 @@ class TestGetDrives(unittest.TestCase):
     def test_no_drives_exits(self) -> None:
         """No drives detected exits with error."""
         with (
-            patch("src.main.find_ventoy_drives", return_value=[]),
+            patch("visync.main.find_ventoy_drives", return_value=[]),
             self.assertRaises(typer.Exit),
         ):
             _get_drives()

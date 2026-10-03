@@ -18,8 +18,8 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src import download as dl
-from src.download import (
+from visync import download as dl
+from visync.download import (
     DistroCheck,
     SyncStatus,
     _download_chunked,
@@ -28,10 +28,10 @@ from src.download import (
     _sweep_old_versions,
     sync_all_configured_distros,
 )
-from src.finder import _dir_size, keyword_hit, load_config
-from src.output import console, error, info, removed, success, warn
-from src.pm import load_installed
-from src.verify import ChecksumUnavailable, expand_url, extract_iso_metadata
+from visync.finder import _dir_size, keyword_hit, load_config
+from visync.output import console, error, info, removed, success, warn
+from visync.pm import load_installed
+from visync.verify import ChecksumUnavailable, expand_url, extract_iso_metadata
 
 ISO_VID_OFFSET = 32808
 
@@ -70,14 +70,14 @@ class TestDryRunGatesClean(unittest.TestCase):
             "ArchLinux", "Arch Linux", filename, SyncStatus.CURRENT, None
         )
 
-    @patch("src.download.visync_watchdog")
-    @patch("src.download._check_distro")
+    @patch("visync.download.visync_watchdog")
+    @patch("visync.download._check_distro")
     def test_sync_clean_dry_run_deletes_nothing(self, mock_check, _wd):
         """--clean --dry-run reports but keeps both ISOs on disk."""
         mock_check.return_value = self._current("archlinux-2026.08.01-x86_64.iso")
         with tempfile.TemporaryDirectory() as tmpdir:
             drive = self._make_drive(tmpdir)
-            with patch("src.download.load_config", return_value=self._config()):
+            with patch("visync.download.load_config", return_value=self._config()):
                 sync_all_configured_distros(
                     dry_run=True,
                     clean=True,
@@ -88,14 +88,14 @@ class TestDryRunGatesClean(unittest.TestCase):
             self.assertTrue((drive / "archlinux-2025.01.01-x86_64.iso").exists())
             self.assertTrue((drive / "archlinux-2026.08.01-x86_64.iso").exists())
 
-    @patch("src.download.visync_watchdog")
-    @patch("src.download._check_distro")
+    @patch("visync.download.visync_watchdog")
+    @patch("visync.download._check_distro")
     def test_sync_clean_without_dry_run_removes_old(self, mock_check, _wd):
         """--clean (no dry-run) removes only the older version."""
         mock_check.return_value = self._current("archlinux-2026.08.01-x86_64.iso")
         with tempfile.TemporaryDirectory() as tmpdir:
             drive = self._make_drive(tmpdir)
-            with patch("src.download.load_config", return_value=self._config()):
+            with patch("visync.download.load_config", return_value=self._config()):
                 sync_all_configured_distros(
                     dry_run=False,
                     clean=True,
@@ -118,8 +118,8 @@ class TestDryRunGatesClean(unittest.TestCase):
             self.assertTrue(f43.exists(), "newer release must survive")
             self.assertFalse(f42.exists())
 
-    @patch("src.download.visync_watchdog")
-    @patch("src.download._check_distro")
+    @patch("visync.download.visync_watchdog")
+    @patch("visync.download._check_distro")
     def test_sync_dry_run_creates_no_staging_dir(self, mock_check, _wd):
         """--dry-run must not create the staging cache directory."""
         mock_check.return_value = DistroCheck(
@@ -137,7 +137,7 @@ class TestDryRunGatesClean(unittest.TestCase):
                 "distros": {"ArchLinux": {"clean_name": "Arch Linux"}},
             }
             with (
-                patch("src.download.load_config", return_value=cfg),
+                patch("visync.download.load_config", return_value=cfg),
                 patch.object(dl, "DEFAULT_STAGING_DIR", staging),
             ):
                 sync_all_configured_distros(
@@ -269,9 +269,9 @@ class TestMissingGpgBinary(unittest.TestCase):
     checksum as UNAVAILABLE (keep the file) instead of crashing with an
     unhandled FileNotFoundError from subprocess.run / subprocess.Popen."""
 
-    @patch("src.verify.shutil.which", return_value=None)
+    @patch("visync.verify.shutil.which", return_value=None)
     def test_import_key_then_verify_raises_checksum_unavailable(self, _mock_which):
-        from src.verify import ChecksumUnavailable, _import_key_then_verify
+        from visync.verify import ChecksumUnavailable, _import_key_then_verify
 
         with self.assertRaises(ChecksumUnavailable):
             _import_key_then_verify(
@@ -280,12 +280,12 @@ class TestMissingGpgBinary(unittest.TestCase):
                 "DEADBEEF00000000000000000000000000000000",
             )
 
-    @patch("src.verify._fetch")
-    @patch("src.verify.shutil.which", return_value=None)
+    @patch("visync.verify._fetch")
+    @patch("visync.verify.shutil.which", return_value=None)
     def test_verify_iso_keeps_file_when_gpg_missing(self, _mock_which, _mock_fetch):
         """verify_iso must not raise FileNotFoundError when gpg is missing —
         it should raise ChecksumUnavailable so callers keep the ISO."""
-        from src.verify import ChecksumUnavailable, verify_iso
+        from visync.verify import ChecksumUnavailable, verify_iso
 
         _mock_fetch.return_value = "\n".join(
             [
@@ -317,10 +317,10 @@ class TestSignatureCheckedForPlainSumsFormat(unittest.TestCase):
     checksum_format == "gpg_checksum", so Parrot's digests were never
     authenticated at all."""
 
-    @patch("src.verify._import_key_then_verify")
-    @patch("src.verify._fetch")
+    @patch("visync.verify._import_key_then_verify")
+    @patch("visync.verify._fetch")
     def test_valid_signature_verifies_plain_sums_format(self, mock_fetch, mock_import):
-        from src.verify import verify_iso
+        from visync.verify import verify_iso
 
         mock_fetch.return_value = "0" * 64 + "  Parrot-security-7.4_amd64.iso\n"
         mock_import.return_value = True
@@ -328,7 +328,7 @@ class TestSignatureCheckedForPlainSumsFormat(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             iso = Path(tmpdir) / "Parrot-security-7.4_amd64.iso"
             iso.write_bytes(b"x" * 64)
-            with patch("src.verify.compute_iso_hash", return_value="0" * 64):
+            with patch("visync.verify.compute_iso_hash", return_value="0" * 64):
                 result = verify_iso(
                     iso,
                     "https://deb.parrotsec.org/parrot/iso/7.4/signed-hashes.txt",
@@ -341,10 +341,10 @@ class TestSignatureCheckedForPlainSumsFormat(unittest.TestCase):
         mock_import.assert_called_once()
         self.assertTrue(result, "valid signature + matching digest must verify")
 
-    @patch("src.verify._import_key_then_verify")
-    @patch("src.verify._fetch")
+    @patch("visync.verify._import_key_then_verify")
+    @patch("visync.verify._fetch")
     def test_bad_signature_fails_plain_sums_format(self, mock_fetch, mock_import):
-        from src.verify import verify_iso
+        from visync.verify import verify_iso
 
         mock_fetch.return_value = "0" * 64 + "  Parrot-security-7.4_amd64.iso\n"
         mock_import.return_value = False
@@ -361,18 +361,18 @@ class TestSignatureCheckedForPlainSumsFormat(unittest.TestCase):
 
         self.assertFalse(result, "a rejected signature must not verify")
 
-    @patch("src.verify._fetch")
+    @patch("visync.verify._fetch")
     def test_no_signing_key_skips_gpg_entirely(self, mock_fetch):
         """Distros without a signing_key_url must not require gpg at all."""
-        from src.verify import verify_iso
+        from visync.verify import verify_iso
 
         mock_fetch.return_value = "0" * 64 + "  arch.iso\n"
         with tempfile.TemporaryDirectory() as tmpdir:
             iso = Path(tmpdir) / "arch.iso"
             iso.write_bytes(b"x" * 64)
             with (
-                patch("src.verify.shutil.which", return_value=None),
-                patch("src.verify.compute_iso_hash", return_value="0" * 64),
+                patch("visync.verify.shutil.which", return_value=None),
+                patch("visync.verify.compute_iso_hash", return_value="0" * 64),
             ):
                 result = verify_iso(
                     iso,
@@ -451,9 +451,9 @@ class TestWindowsTextModeCorruption(unittest.TestCase):
 
 
 class TestDownloadKeepsFileWhenChecksumUnavailable(unittest.TestCase):
-    @patch("src.verify.verify_from_config")
-    @patch("src.download.urllib.request.urlopen")
-    @patch("src.download.urllib.request.Request")
+    @patch("visync.verify.verify_from_config")
+    @patch("visync.download.urllib.request.urlopen")
+    @patch("visync.download.urllib.request.Request")
     def test_fetch_failure_keeps_download(self, _req, mock_urlopen, mock_verify):
         head = MagicMock()
         head.headers = {"Content-Length": "500"}
@@ -467,7 +467,7 @@ class TestDownloadKeepsFileWhenChecksumUnavailable(unittest.TestCase):
         mock_urlopen.side_effect = [head, body]
         mock_verify.side_effect = ChecksumUnavailable("mirror unreachable")
 
-        from src.download import download_iso
+        from visync.download import download_iso
 
         with tempfile.TemporaryDirectory() as tmpdir:
             dest = Path(tmpdir) / "test.iso"
@@ -486,7 +486,7 @@ class TestDownloadKeepsFileWhenChecksumUnavailable(unittest.TestCase):
 class TestDownloadOverwritesExistingDestination(unittest.TestCase):
     """Re-download over an existing ISO must overwrite (Windows-safe atomic move)."""
 
-    @patch("src.download.urllib.request.urlopen")
+    @patch("visync.download.urllib.request.urlopen")
     def test_existing_destination_is_overwritten(self, mock_urlopen):
         """PosixPath.rename raises FileExistsError on Windows; replace must be used."""
         head = MagicMock()
@@ -500,7 +500,7 @@ class TestDownloadOverwritesExistingDestination(unittest.TestCase):
         body.__exit__ = MagicMock(return_value=False)
         mock_urlopen.side_effect = [head, body]
 
-        from src.download import download_iso
+        from visync.download import download_iso
 
         real_rename = dl.Path.rename
 
@@ -531,8 +531,8 @@ class TestDownloadOverwritesExistingDestination(unittest.TestCase):
 
 
 class TestApiResolvedChecksums(unittest.TestCase):
-    @patch("src.download.ping_mirror", return_value=True)
-    @patch("src.download.fetch_html")
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.fetch_html")
     def test_popos_stashes_sha256(self, mock_fetch, _ping):
         mock_fetch.return_value = json.dumps(
             {
@@ -545,8 +545,8 @@ class TestApiResolvedChecksums(unittest.TestCase):
         self.assertEqual(name, "pop-os.iso")
         self.assertEqual(settings.get("resolved_checksum"), "ab" * 32)
 
-    @patch("src.download.ping_mirror", return_value=True)
-    @patch("src.download.fetch_html")
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.fetch_html")
     def test_tails_stashes_target_sha256(self, mock_fetch, _ping):
         mock_fetch.return_value = json.dumps(
             {
@@ -633,7 +633,7 @@ class TestMarkupEscaping(unittest.TestCase):
     def _capture(self, fn, msg, terminal=False):
         buf = __import__("io").StringIO()
         cap = type(console)(file=buf, force_terminal=terminal, width=200)
-        with patch.object(sys.modules["src.output"], "console", cap):
+        with patch.object(sys.modules["visync.output"], "console", cap):
             fn(msg)
         return buf.getvalue()
 
@@ -700,7 +700,7 @@ class TestStateRobustness(unittest.TestCase):
             self.assertEqual(load_installed(drive), {})
 
     def test_save_is_atomic_no_tmp_leftovers(self):
-        from src.pm import save_installed
+        from visync.pm import save_installed
 
         with tempfile.TemporaryDirectory() as tmp:
             drive = Path(tmp)
@@ -720,7 +720,7 @@ if __name__ == "__main__":
 class TestGpgFingerprintPinning(unittest.TestCase):
     def _run_verify(self, pins, validsig):
         """Drive _import_key_then_verify with mocked gpg + key fetch."""
-        from src.verify import _import_key_then_verify
+        from visync.verify import _import_key_then_verify
 
         def fake_run(cmd, **kw):
             r = MagicMock()
@@ -730,9 +730,9 @@ class TestGpgFingerprintPinning(unittest.TestCase):
             return r
 
         with (
-            patch("src.verify.subprocess.run", side_effect=fake_run),
-            patch("src.verify.urlopen") as mu,
-            patch("src.verify.shutil.which", return_value="/usr/bin/gpg"),
+            patch("visync.verify.subprocess.run", side_effect=fake_run),
+            patch("visync.verify.urlopen") as mu,
+            patch("visync.verify.shutil.which", return_value="/usr/bin/gpg"),
         ):
             resp = MagicMock()
             resp.read.return_value = b"-----BEGIN PGP PUBLIC KEY BLOCK-----"
@@ -771,7 +771,7 @@ class TestGpgFingerprintPinning(unittest.TestCase):
         )
 
     def test_config_fingerprints_flow_through_config(self):
-        from src.finder import load_config
+        from visync.finder import load_config
 
         cfg = load_config()
         for entry in ("Fedora", "FedoraKDE", "FedoraARM"):
@@ -798,8 +798,8 @@ class TestNestedVersionSort(unittest.TestCase):
             "iso_regex": 'href="(Fedora-Workstation-Live-(?:x86_64-[0-9][0-9.\\-]*\\.iso|[0-9][0-9.\\-]*\\.x86_64\\.iso))"',
         }
 
-    @patch("src.download.ping_mirror", return_value=True)
-    @patch("src.download.fetch_html")
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.fetch_html")
     def test_trailing_slash_capture_still_picks_max(self, mock_fetch, _ping):
         """Apache lists 7,8,9 after 44 alphabetically; numeric max must win."""
         mock_fetch.side_effect = [
@@ -885,7 +885,7 @@ class TestInsecureUrlGracefulSkip(unittest.TestCase):
 
 class TestValidSigPrimaryField(unittest.TestCase):
     def _run(self, stdout):
-        from src.verify import _import_key_then_verify
+        from visync.verify import _import_key_then_verify
 
         def fake_run(cmd, **kw):
             r = MagicMock()
@@ -895,9 +895,9 @@ class TestValidSigPrimaryField(unittest.TestCase):
             return r
 
         with (
-            patch("src.verify.subprocess.run", side_effect=fake_run),
-            patch("src.verify.urlopen") as mu,
-            patch("src.verify.shutil.which", return_value="/usr/bin/gpg"),
+            patch("visync.verify.subprocess.run", side_effect=fake_run),
+            patch("visync.verify.urlopen") as mu,
+            patch("visync.verify.shutil.which", return_value="/usr/bin/gpg"),
         ):
             resp = MagicMock()
             resp.read.return_value = b"key"
@@ -936,7 +936,7 @@ class TestValidSigPrimaryField(unittest.TestCase):
 
 class TestHostileMetadataShapes(unittest.TestCase):
     def test_scalar_metadata_ignored(self):
-        from src.finder import load_all_metadata
+        from visync.finder import load_all_metadata
 
         with tempfile.TemporaryDirectory() as tmp:
             drive = Path(tmp)
@@ -954,7 +954,7 @@ class TestHostileMetadataShapes(unittest.TestCase):
 
 class TestWatchdogSkipsNonJson(unittest.TestCase):
     def test_deep_clean_survives_stray_iso_in_metadata(self):
-        from src.finder import _deep_clean_metadata
+        from visync.finder import _deep_clean_metadata
 
         with tempfile.TemporaryDirectory() as tmp:
             drive = Path(tmp)
@@ -976,7 +976,7 @@ class TestWatchdogSkipsNonJson(unittest.TestCase):
         A non-.json ballast file is used deliberately: it survives stage 1's deep
         clean, which is what forces the stage-2 decision.
         """
-        from src.finder import VISYNC_SIZE_LIMIT
+        from visync.finder import VISYNC_SIZE_LIMIT
 
         drive = Path(tmp)
         visync_dir = drive / ".visync"
@@ -989,7 +989,7 @@ class TestWatchdogSkipsNonJson(unittest.TestCase):
 
     def test_watchdog_default_does_not_wipe(self):
         """Over budget without --reset-visync must NOT destroy .visync/ (C4)."""
-        from src.finder import visync_watchdog
+        from visync.finder import visync_watchdog
 
         with tempfile.TemporaryDirectory() as tmp:
             drive, keeper = self._over_budget_drive(tmp)
@@ -1002,7 +1002,7 @@ class TestWatchdogSkipsNonJson(unittest.TestCase):
 
     def test_watchdog_wipes_only_when_opted_in(self):
         """allow_wipe=True removes .visync contents but nothing outside it."""
-        from src.finder import visync_watchdog
+        from visync.finder import visync_watchdog
 
         with tempfile.TemporaryDirectory() as tmp:
             drive, keeper = self._over_budget_drive(tmp)
@@ -1015,8 +1015,8 @@ class TestWatchdogSkipsNonJson(unittest.TestCase):
 
     def test_dry_run_sync_never_runs_the_watchdog(self):
         """--dry-run must leave .visync/ (and installed.json) byte-for-byte intact."""
-        from src.download import sync_all_configured_distros
-        from src.finder import VISYNC_SIZE_LIMIT
+        from visync.download import sync_all_configured_distros
+        from visync.finder import VISYNC_SIZE_LIMIT
 
         with tempfile.TemporaryDirectory() as tmp:
             drive, _keeper = self._over_budget_drive(tmp)
@@ -1030,9 +1030,9 @@ class TestWatchdogSkipsNonJson(unittest.TestCase):
             }
 
             with (
-                patch("src.download.load_config", return_value=cfg),
-                patch("src.download._sweep_old_versions"),
-                patch("src.download._check_distro") as check,
+                patch("visync.download.load_config", return_value=cfg),
+                patch("visync.download._sweep_old_versions"),
+                patch("visync.download._check_distro") as check,
             ):
                 check.return_value = DistroCheck(
                     "ArchLinux", "Arch Linux", "a.iso", SyncStatus.CURRENT, None
@@ -1061,7 +1061,7 @@ class TestWatchdogSkipsNonJson(unittest.TestCase):
 
     def test_watchdog_deep_cleans_orphans_without_opting_in(self):
         """Stage 1 still runs unattended and reclaims orphaned metadata."""
-        from src.finder import VISYNC_SIZE_LIMIT, visync_watchdog
+        from visync.finder import VISYNC_SIZE_LIMIT, visync_watchdog
 
         with tempfile.TemporaryDirectory() as tmp:
             drive = Path(tmp)
@@ -1076,7 +1076,7 @@ class TestWatchdogSkipsNonJson(unittest.TestCase):
                 )
             assert _dir_size(visync_dir) < VISYNC_SIZE_LIMIT
 
-            with patch("src.finder.VISYNC_SIZE_LIMIT", 1):
+            with patch("visync.finder.VISYNC_SIZE_LIMIT", 1):
                 visync_watchdog(drive)
 
             self.assertFalse(orphan.exists(), "orphaned metadata must be deep-cleaned")
@@ -1108,8 +1108,8 @@ class TestUbuntuLtsVersionFilter(unittest.TestCase):
             "iso_regex": iso_regex,
         }
 
-    @patch("src.download.ping_mirror", return_value=True)
-    @patch("src.download.fetch_html")
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.fetch_html")
     def test_picks_newest_lts_not_newest_release(self, mock_fetch, _ping):
         mock_fetch.side_effect = [
             self.INDEX,
@@ -1126,8 +1126,8 @@ class TestUbuntuLtsVersionFilter(unittest.TestCase):
         self.assertIn("/26.04.1/", url)
         print("interim 25.10/26.10 skipped, newest LTS 26.04.1 chosen")
 
-    @patch("src.download.ping_mirror", return_value=True)
-    @patch("src.download.fetch_html")
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.fetch_html")
     def test_lts_filter_rejects_interim_only_release(self, mock_fetch, _ping):
         """A filter matching nothing must fail closed, not fall back."""
         mock_fetch.return_value = self.INDEX
@@ -1205,8 +1205,8 @@ class TestNixosStableChannelDiscovery(unittest.TestCase):
             channel, _ = dl._nixos_stable_channel({"channel": "19.04"})
         self.assertEqual(channel, "26.05")
 
-    @patch("src.download.ping_mirror", return_value=True)
-    @patch("src.download.fetch_html", return_value="")
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.fetch_html", return_value="")
     def test_unreachable_listing_is_reported(self, _fetch, _ping):
         settings = {
             "strategy": "nixos_channel",
@@ -1216,8 +1216,8 @@ class TestNixosStableChannelDiscovery(unittest.TestCase):
         self.assertIn("release listing", settings.get("resolve_error", ""))
         print("listing failure surfaces, no channel guessed")
 
-    @patch("src.download.ping_mirror", return_value=True)
-    @patch("src.download.fetch_html", return_value="<html>nothing useful</html>")
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.fetch_html", return_value="<html>nothing useful</html>")
     def test_listing_without_channels_is_reported(self, _fetch, _ping):
         settings = {
             "strategy": "nixos_channel",
@@ -1226,9 +1226,9 @@ class TestNixosStableChannelDiscovery(unittest.TestCase):
         dl.process_scraping_strategy("NixOS", settings)
         self.assertIn("channels", settings.get("resolve_error", ""))
 
-    @patch("src.download.ping_mirror", return_value=True)
+    @patch("visync.download.ping_mirror", return_value=True)
     @patch(
-        "src.download.fetch_html",
+        "visync.download.fetch_html",
         return_value="<Prefix>nixos/99.99/</Prefix><Prefix>nixos/26.05/</Prefix>",
     )
     def test_implausible_channel_is_refused(self, _fetch, _ping):
@@ -1240,8 +1240,8 @@ class TestNixosStableChannelDiscovery(unittest.TestCase):
         self.assertIn("implausible", settings.get("resolve_error", ""))
         print("bogus listing cannot redirect the download URL")
 
-    @patch("src.download.ping_mirror", return_value=True)
-    @patch("src.download.fetch_html")
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.fetch_html")
     def test_channel_release_mismatch_is_refused(self, mock_fetch, _ping):
         """If the channel page names a different series, stop."""
         listing = "<Prefix>nixos/26.05/</Prefix>"
@@ -1357,7 +1357,7 @@ class TestVariantKey(unittest.TestCase):
     disabled old-version cleanup for Pop!_OS. Unified into variant_key()."""
 
     def test_arch_and_version_tokens_are_stripped(self):
-        from src.download import variant_key
+        from visync.download import variant_key
 
         cases = {
             "Pop_OS 24.04 amd64": "pop-os",
@@ -1377,12 +1377,12 @@ class TestVariantKey(unittest.TestCase):
 
     def test_arch_token_after_underscore_is_stripped(self):
         """amd64 glued to underscores must still be recognised."""
-        from src.download import variant_key
+        from visync.download import variant_key
 
         self.assertNotIn("amd64", variant_key("pop-os_24.04_amd64_generic_24.iso"))
 
     def test_thin_aliases_agree(self):
-        from src.download import _filename_variant_key, _variant_stem, variant_key
+        from visync.download import _filename_variant_key, _variant_stem, variant_key
 
         for raw in ("Fedora-KDE-Live-44", "tails-amd64-7.14.img"):
             with self.subTest(text=raw):
@@ -1390,7 +1390,7 @@ class TestVariantKey(unittest.TestCase):
                 self.assertEqual(_filename_variant_key(raw), variant_key(raw))
 
     def test_distinct_variants_stay_distinct(self):
-        from src.download import variant_key
+        from visync.download import variant_key
 
         pairs = [
             ("Ubuntu 26.04.1 LTS amd64", "Ubuntu-Server 26.04.1 LTS amd64"),
@@ -1402,7 +1402,7 @@ class TestVariantKey(unittest.TestCase):
 
     def test_prefix_filter_matches_pop_os_vid_against_filename(self):
         """The bug this fixes: 'pop_os' vs 'pop-os' rejected every candidate."""
-        from src.download import same_variant_prefix, variant_key
+        from visync.download import same_variant_prefix, variant_key
 
         vid_key = variant_key("Pop_OS 24.04 amd64")
         name_key = variant_key("pop-os_24.03_amd64_generic_23.iso")
@@ -1410,7 +1410,7 @@ class TestVariantKey(unittest.TestCase):
 
     def test_prefix_filter_still_permissive_for_arch(self):
         """Volume key 'arch' vs filename key 'archlinux' must still proceed."""
-        from src.download import same_variant_prefix, variant_key
+        from visync.download import same_variant_prefix, variant_key
 
         self.assertTrue(
             same_variant_prefix(
@@ -1420,12 +1420,12 @@ class TestVariantKey(unittest.TestCase):
         )
 
     def test_prefix_filter_rejects_unrelated(self):
-        from src.download import same_variant_prefix
+        from visync.download import same_variant_prefix
 
         self.assertFalse(same_variant_prefix("fedora-kde-live", "archlinux"))
 
     def test_empty_keys_are_permissive(self):
-        from src.download import same_variant_prefix
+        from visync.download import same_variant_prefix
 
         self.assertTrue(same_variant_prefix("", "anything"))
 
@@ -1438,7 +1438,7 @@ class TestCleanupDeletionSafety(unittest.TestCase):
 
     def test_cleanup_removes_older_pop_os_build(self):
         """Pop!_OS cleanup was fully broken; this is the regression."""
-        from src.download import _cleanup_old_versions
+        from visync.download import _cleanup_old_versions
 
         with tempfile.TemporaryDirectory() as tmpdir:
             drive = self._drive(tmpdir)
@@ -1456,7 +1456,7 @@ class TestCleanupDeletionSafety(unittest.TestCase):
 
     def test_cleanup_keeps_different_variants(self):
         """Desktop and server must never be treated as the same variant."""
-        from src.download import _cleanup_old_versions
+        from visync.download import _cleanup_old_versions
 
         with tempfile.TemporaryDirectory() as tmpdir:
             drive = self._drive(tmpdir)
@@ -1473,7 +1473,7 @@ class TestCleanupDeletionSafety(unittest.TestCase):
             self.assertTrue(desktop.exists())
 
     def test_cleanup_keeps_fedora_netinst_and_kde(self):
-        from src.download import _cleanup_old_versions
+        from visync.download import _cleanup_old_versions
 
         with tempfile.TemporaryDirectory() as tmpdir:
             drive = self._drive(tmpdir)
@@ -1492,7 +1492,7 @@ class TestCleanupDeletionSafety(unittest.TestCase):
             self.assertTrue(kde.exists())
 
     def test_cleanup_removes_older_build_of_same_variant(self):
-        from src.download import _cleanup_old_versions
+        from visync.download import _cleanup_old_versions
 
         with tempfile.TemporaryDirectory() as tmpdir:
             drive = self._drive(tmpdir)
@@ -1509,7 +1509,7 @@ class TestCleanupDeletionSafety(unittest.TestCase):
             self.assertTrue(new.exists())
 
     def test_cleanup_never_touches_unidentified_isos(self):
-        from src.download import _cleanup_old_versions
+        from visync.download import _cleanup_old_versions
 
         with tempfile.TemporaryDirectory() as tmpdir:
             drive = self._drive(tmpdir)
@@ -1522,7 +1522,7 @@ class TestCleanupDeletionSafety(unittest.TestCase):
             self.assertTrue(keeper.exists(), "unidentifiable ISO must survive")
 
     def test_sweep_groups_by_variant_and_keeps_newest(self):
-        from src.download import _sweep_old_versions
+        from visync.download import _sweep_old_versions
 
         with tempfile.TemporaryDirectory() as tmpdir:
             drive = self._drive(tmpdir)
@@ -1544,7 +1544,7 @@ class TestCleanupDeletionSafety(unittest.TestCase):
             self.assertTrue(kde.exists())
 
     def test_sweep_dry_run_deletes_nothing(self):
-        from src.download import _sweep_old_versions
+        from visync.download import _sweep_old_versions
 
         with tempfile.TemporaryDirectory() as tmpdir:
             drive = self._drive(tmpdir)
@@ -1597,7 +1597,7 @@ class TestConfigNameConsistency(unittest.TestCase):
     }
 
     def test_every_clean_name_is_identifiable(self):
-        from src.finder import identify_distro
+        from visync.finder import identify_distro
 
         cfg = load_config()
         for entry_id, settings in sorted(cfg["distros"].items()):
@@ -1612,7 +1612,7 @@ class TestConfigNameConsistency(unittest.TestCase):
                 )
 
     def test_fedora_x86_is_not_labelled_arm(self):
-        from src.finder import identify_distro
+        from visync.finder import identify_distro
 
         self.assertEqual(
             identify_distro(
@@ -1629,7 +1629,7 @@ class TestConfigNameConsistency(unittest.TestCase):
         )
 
     def test_ubuntu_desktop_and_server_are_distinct(self):
-        from src.finder import identify_distro
+        from visync.finder import identify_distro
 
         self.assertEqual(
             identify_distro(
@@ -1647,7 +1647,7 @@ class TestConfigNameConsistency(unittest.TestCase):
 
     def test_standalone_specificity_does_not_depend_on_toml_order(self):
         """Specificity is decided by keyword length, not config line order."""
-        from src import finder
+        from visync import finder
 
         cfg = finder.load_config()
         generic = {"nixos", "nixos-minimal", "nixos-graphical"}
@@ -1677,7 +1677,7 @@ class TestConfigNameConsistency(unittest.TestCase):
 
 class TestQueryNormalisation(unittest.TestCase):
     def test_separator_styles_resolve_to_one_entry(self):
-        from src.pm import resolve_distro
+        from visync.pm import resolve_distro
 
         cfg = load_config()
         for query in (
@@ -1691,7 +1691,7 @@ class TestQueryNormalisation(unittest.TestCase):
                 self.assertEqual(resolve_distro(query, cfg), "UbuntuDesktop")
 
     def test_ambiguous_queries_are_still_refused(self):
-        from src.pm import matching_distros
+        from visync.pm import matching_distros
 
         cfg = load_config()
         for query in ("ubuntu", "u"):
@@ -1701,10 +1701,126 @@ class TestQueryNormalisation(unittest.TestCase):
                 self.assertGreater(len(partials), 1)
 
     def test_empty_query_returns_nothing(self):
-        from src.pm import matching_distros, resolve_distro
+        from visync.pm import matching_distros, resolve_distro
 
         cfg = load_config()
         for query in ("", "   ", "!!!"):
             with self.subTest(query=query):
                 self.assertIsNone(resolve_distro(query, cfg))
                 self.assertEqual(matching_distros(query, cfg), (None, []))
+
+
+# ── Packaging: the installed artifact must be self-contained ─────────────────
+
+
+class TestPackagedConfig(unittest.TestCase):
+    """The wheel used to ship no config.toml, so `pip install visync` produced a
+    tool that reported "No distros configured" and exited 0. `visync --help`
+    still passed, which is why CI never caught it."""
+
+    def test_packaged_config_is_not_taken_from_the_cwd(self):
+        """Discovery must not fall through to a config in the working directory.
+
+        Run from a temp dir that has its own config.toml. Resolution must pick
+        the installed one, not ./config.toml — otherwise a planted config in any
+        directory could hijack distro identification.
+        """
+        from visync.finder import _config_candidates, _packaged_config
+
+        installed = _packaged_config()
+        self.assertTrue(installed.is_file(), f"resolved config missing: {installed}")
+
+        original = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            planted = Path(tmp) / "config.toml"
+            planted.write_text('[distros]\nplanted = { clean_name = "Planted" }\n')
+            try:
+                os.chdir(tmp)
+                self.assertEqual(
+                    _packaged_config().resolve(),
+                    installed.resolve(),
+                    "packaged config must not be cwd-relative",
+                )
+                # The cwd is the last-resort candidate by design, so what matters
+                # is that it is last and never outranks the installed config.
+                # macOS reports /var and /private/var differently, so compare
+                # resolved paths rather than the raw strings.
+                candidates = [c.resolve() for c in _config_candidates()]
+                self.assertEqual(
+                    candidates[-1],
+                    planted.resolve(),
+                    "the cwd config must remain the final fallback",
+                )
+                self.assertIn(installed.resolve(), candidates)
+                self.assertLess(
+                    candidates.index(installed.resolve()),
+                    len(candidates) - 1,
+                    "the installed config must be preferred over the cwd",
+                )
+            finally:
+                os.chdir(original)
+
+    def test_wheel_layout_puts_config_beside_the_modules(self):
+        """The built wheel ships visync/config.toml.
+
+        Checked against the packaging config rather than a built artefact, so it
+        runs in CI before the build job.
+        """
+        pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+        text = pyproject.read_text()
+        self.assertIn('packages = ["visync"]', text)
+        self.assertIn('"config.toml" = "visync/config.toml"', text)
+
+    def test_packaged_config_parses_and_has_distros(self):
+        from visync.finder import reset_config_cache
+
+        reset_config_cache()
+        cfg = load_config()
+        self.assertIn("distros", cfg)
+        self.assertGreater(len(cfg["distros"]), 5)
+        reset_config_cache()
+
+    def test_load_config_reports_a_missing_file_clearly(self):
+        """A missing config used to print 'Failed to parse config.toml'."""
+        from visync.finder import load_config, reset_config_cache
+
+        reset_config_cache()
+        self.assertEqual(load_config(Path("/nonexistent/visync.toml")), {})
+        reset_config_cache()
+
+    def test_module_is_importable_under_its_own_name(self):
+        """The package must not be a top-level module called `src`."""
+        import visync
+        import visync.main
+
+        self.assertTrue(hasattr(visync, "__version__"))
+        self.assertTrue(hasattr(visync.main, "app"))
+        with self.assertRaises(ModuleNotFoundError):
+            __import__("src")
+
+    def test_no_sys_path_mutation_on_import(self):
+        """download.py used to prepend the repo root to sys.path at import.
+
+        Compared against a snapshot taken before the import, so an editable
+        install (where the repo root is already present via the .pth file) is
+        not mistaken for the bug.
+        """
+        import sys
+
+        before = list(sys.path)
+        import visync.download  # noqa: F401
+
+        self.assertEqual(
+            [p for p in sys.path if p not in before],
+            [],
+            "importing visync must not add anything to sys.path",
+        )
+
+    def test_editable_layout_resolves_to_repo_root_config(self):
+        """With config.toml at the repo root (editable install / checkout),
+        discovery must find it rather than falling through to the cwd."""
+        from visync.finder import _packaged_config
+
+        path = _packaged_config()
+        self.assertTrue(path.is_file(), f"resolved config missing: {path}")
+        self.assertEqual(path.name, "config.toml")

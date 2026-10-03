@@ -8,7 +8,7 @@ from pathlib import Path
 import typer
 from rich.markup import escape as _esc
 
-from src.finder import (
+from visync.finder import (
     find_installed_isos,
     find_ventoy_drives,
     get_iso_volume_id,
@@ -16,7 +16,7 @@ from src.finder import (
     load_all_metadata,
     load_config,
 )
-from src.output import (
+from visync.output import (
     console,
     error,
     failure_table,
@@ -25,8 +25,8 @@ from src.output import (
     success,
     warn,
 )
-from src.output import info as output_info
-from src.verify import extract_version_from_filename, run_directory_verify
+from visync.output import info as output_info
+from visync.verify import extract_version_from_filename, run_directory_verify
 
 app = typer.Typer()
 
@@ -113,7 +113,7 @@ def _sync_one_drive(
     its own bookkeeping before deciding on an exit code. The failure block is
     printed here so install/update/sync all surface it identically.
     """
-    from src.download import sync_all_configured_distros
+    from visync.download import sync_all_configured_distros
 
     _dir, _downloaded, failures = sync_all_configured_distros(
         dry_run=dry_run,
@@ -167,7 +167,7 @@ def install(
 
     Use a distro name directly, or pass a file with one name per line.
     """
-    from src.pm import mark_installed, matching_distros, resolve_distro
+    from visync.pm import mark_installed, matching_distros, resolve_distro
 
     config_data = load_config(config)
     target_drives = _get_drives(_parse_drives(drive))
@@ -325,8 +325,8 @@ def remove(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:
     """Remove a distro from the Ventoy drive."""
-    from src.finder import remove_iso_metadata
-    from src.pm import mark_removed, matching_distros, resolve_distro
+    from visync.finder import remove_iso_metadata
+    from visync.pm import mark_removed, matching_distros, resolve_distro
 
     config_data = load_config(config)
     target_drives = _get_drives(_parse_drives(drive))
@@ -440,9 +440,9 @@ def update(
     ),
 ) -> None:
     """Update installed distros to latest versions."""
-    from src.pm import get_installed_ids, resolve_distro
-    from src.pm import mark_installed as _mark_installed
-    from src.verify import extract_version_from_filename as _extract_ver
+    from visync.pm import get_installed_ids, resolve_distro
+    from visync.pm import mark_installed as _mark_installed
+    from visync.verify import extract_version_from_filename as _extract_ver
 
     config_data = load_config(config)
     target_drives = _get_drives(_parse_drives(drive))
@@ -457,7 +457,7 @@ def update(
         if name:
             entry_id = resolve_distro(name, config_data)
             if not entry_id:
-                from src.pm import matching_distros
+                from visync.pm import matching_distros
 
                 _, partials = matching_distros(name, config_data)
                 if partials:
@@ -530,7 +530,7 @@ def search(
     ),
 ) -> None:
     """Search available distros."""
-    from src.pm import get_installed_ids, resolve_distro
+    from visync.pm import get_installed_ids, resolve_distro
 
     config_data = load_config(config)
     distros = config_data.get("distros", {})
@@ -624,7 +624,7 @@ def info(
     ),
 ) -> None:
     """Show details about a distro."""
-    from src.pm import get_installed_ids, resolve_distro
+    from visync.pm import get_installed_ids, resolve_distro
 
     config_data = load_config(config)
     distros = config_data.get("distros", {})
@@ -689,7 +689,7 @@ def autodetect(
     ),
 ) -> None:
     """Auto-detect ISOs on the drive and mark them as installed."""
-    from src.pm import mark_installed
+    from visync.pm import mark_installed
 
     config_data = load_config(config)
     target_drives = _get_drives(_parse_drives(drive))
@@ -721,7 +721,7 @@ def autodetect(
                     break
             if not entry_id:
                 # Fallback: check if any config keyword appears in the filename
-                from src.finder import keyword_hit
+                from visync.finder import keyword_hit
 
                 for eid, s in distros.items():
                     keyword = s.get("keyword", "")
@@ -732,7 +732,7 @@ def autodetect(
                 continue
 
             # Check if already marked
-            from src.pm import get_installed_ids
+            from visync.pm import get_installed_ids
 
             installed = set(get_installed_ids(ventoy_root))
             if entry_id in installed:
@@ -840,7 +840,7 @@ def sync(
     ),
 ) -> None:
     """Sync installed distros to the Ventoy drive."""
-    from src.pm import get_installed_ids
+    from visync.pm import get_installed_ids
 
     target_drives = _get_drives(_parse_drives(drive))
 
@@ -892,7 +892,7 @@ def verify(
     ),
 ) -> None:
     """Verify integrity of ISOs on the Ventoy drive."""
-    from src.verify import UNAVAILABLE
+    from visync.verify import UNAVAILABLE
 
     config_data = load_config(config)
     target_drives = _get_drives(_parse_drives(drive))
@@ -959,7 +959,7 @@ def nuke_metadata(
     Keeps installed.json and other state. Metadata rebuilds on next sync.
     Only .json metadata files are eligible for deletion.
     """
-    from src.finder import _guard_json_only
+    from visync.finder import _guard_json_only
 
     target_drives = _get_drives(_parse_drives(drive))
 

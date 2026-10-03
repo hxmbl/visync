@@ -31,3 +31,6 @@ build/
 .cache
 nosetests.xml
 coverage.xml
+
+# 255 KB audit dump accidentally committed; see git history before 8bb78aa
+audit.txt

@@ -4,11 +4,19 @@ Ventoy Package Manager. Install, update, and manage Linux distros on your Ventoy
 
 ## Install
 
+Requires Python 3.11+ and a mounted Ventoy drive.
+
 ```bash
-pip install -e .
+pip install visync
 ```
 
-Requires Python 3.11+ and a mounted Ventoy drive.
+For a development checkout:
+
+```bash
+pip install -e ".[dev]"
+```
+
+Both layouts work out of the box: `config.toml` ships inside the installed package, so `visync search` finds the distro list from any directory.
 
 ## Quick Start
 
@@ -91,7 +99,7 @@ Blank lines and lines starting with `#` are ignored.
 
 Edit `config.toml` to add or remove distros. Each distro entry defines a scraping strategy, mirror URL, and checksum verification method.
 
-Config resolution order: explicit `--config` path, then `$VISYNC_CONFIG`, then `~/.config/visync/config.toml`, then the packaged `config.toml`. A `config.toml` in the current directory is only used as a last resort, so planted configs cannot hijack identification.
+Config resolution order: explicit `--config` path, then `$VISYNC_CONFIG`, then `~/.config/visync/config.toml`, then the `config.toml` shipped inside the installed package. A `config.toml` in the current directory is only used as a last resort, so planted configs cannot hijack identification.
 
 **Release selection:** `version_filter` restricts a scraper to one release family before the newest match is chosen. Ubuntu entries use `\d*[02468]\.04(\.\d+)*` so they track the current LTS (26.04.1) and ignore interim releases (25.10, 26.10). NixOS resolves the newest stable `YY.MM` channel from the release bucket at scrape time, so it advances to the next stable without a config edit; set `channel = "26.05"` to pin deliberately while that channel is current.
 
@@ -144,6 +152,8 @@ Signature checking is configured separately via `signing_key_url` + `signing_key
 ```bash
 python3 -m pytest test/ -v
 ```
+
+CI installs from the committed `uv.lock` so a dependency release cannot break the build without a diff. `uv` is used for reproducible CI and builds only — installing visync itself with `pip` is fully supported.
 
 ## Debug
 

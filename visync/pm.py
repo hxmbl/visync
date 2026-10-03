@@ -9,7 +9,7 @@ import os
 from datetime import UTC, datetime
 from pathlib import Path
 
-from src.output import warn
+from visync.output import warn
 
 
 def _state_path(drive_root: Path) -> Path:
@@ -76,7 +76,7 @@ def _norm_query(text: str) -> str:
     ``UbuntuDesktop`` all reach the same entry. Reuses finder's normaliser so
     query matching and filename matching cannot drift apart.
     """
-    from src.finder import _norm_tokens
+    from visync.finder import _norm_tokens
 
     return _norm_tokens(text)
 

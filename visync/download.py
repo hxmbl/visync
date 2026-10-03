@@ -17,8 +17,7 @@ from urllib.parse import urlparse
 
 from rich.markup import escape as _esc
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from src.finder import (
+from visync.finder import (
     find_installed_isos,
     find_ventoy_drives,
     get_iso_volume_id,
@@ -28,10 +27,10 @@ from src.finder import (
     visync_watchdog,
     write_iso_metadata,
 )
-from src.net import install_safe_opener, require_https
+from visync.net import install_safe_opener, require_https
 
 install_safe_opener()
-from src.output import (
+from visync.output import (
     console,
     error,
     header,
@@ -44,7 +43,7 @@ from src.output import (
     success,
     warn,
 )
-from src.verify import compare_versions, extract_version_from_filename, parse_version
+from visync.verify import compare_versions, extract_version_from_filename, parse_version
 
 DEBUG = os.environ.get("VISYNC_DEBUG", "0") == "1"
 
@@ -799,7 +798,7 @@ def download_iso(
 
         # Auto-verify checksum if config is available
         if not no_verify and distro_config and checksums_config is not None:
-            from src.verify import ChecksumUnavailable, verify_from_config
+            from visync.verify import ChecksumUnavailable, verify_from_config
 
             spin_update(f"Verifying checksum for {dest_path.name}...")
             try:

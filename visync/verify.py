@@ -17,15 +17,15 @@ import urllib.request
 from pathlib import Path
 from urllib.request import urlopen
 
-from src.finder import (
+from visync.finder import (
     find_installed_isos,
     get_iso_volume_id,
     identify_distro,
     keyword_hit,
     load_all_metadata,
 )
-from src.net import install_safe_opener, require_https
-from src.output import warn
+from visync.net import install_safe_opener, require_https
+from visync.output import warn
 
 install_safe_opener()
 

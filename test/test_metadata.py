@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.finder import (
+from visync.finder import (
     VISYNC_SIZE_LIMIT,
     _deep_clean_metadata,
     _dir_size,
@@ -301,7 +301,7 @@ class TestVisyncWatchdog(unittest.TestCase):
                     return VISYNC_SIZE_LIMIT + 1  # first check: trigger
                 return 100  # after clean: under limit
 
-            with patch("src.finder._dir_size", side_effect=fake_size):
+            with patch("visync.finder._dir_size", side_effect=fake_size):
                 visync_watchdog(drive)
             # Orphan removed, real preserved
             self.assertTrue((meta_dir / "real.iso.json").exists())
@@ -321,7 +321,7 @@ class TestVisyncWatchdog(unittest.TestCase):
                 # First call (check): over limit. Second call (after deep clean): still over.
                 return VISYNC_SIZE_LIMIT + 1
 
-            with patch("src.finder._dir_size", side_effect=fake_size):
+            with patch("visync.finder._dir_size", side_effect=fake_size):
                 visync_watchdog(drive, allow_wipe=True)
             self.assertFalse((drive / ".visync").exists())
             _ok("Full wipe executed when opted in")
@@ -335,7 +335,7 @@ class TestVisyncWatchdog(unittest.TestCase):
             def fake_size(p):
                 return VISYNC_SIZE_LIMIT + 1
 
-            with patch("src.finder._dir_size", side_effect=fake_size):
+            with patch("visync.finder._dir_size", side_effect=fake_size):
                 visync_watchdog(drive)  # no allow_wipe
             self.assertTrue(
                 (drive / ".visync").exists(),
@@ -511,7 +511,7 @@ class TestWatchdogGuardrails(unittest.TestCase):
             # We do this by making .visync a symlink to .not_visync
             (drive / ".visync").symlink_to(bad_visync)
             # Patch _dir_size to trigger the over-limit path
-            with patch("src.finder._dir_size", return_value=VISYNC_SIZE_LIMIT + 1):
+            with patch("visync.finder._dir_size", return_value=VISYNC_SIZE_LIMIT + 1):
                 # The guard checks visync_dir.name which will be ".visync" (from symlink)
                 # but let's test the guard function directly with a truly wrong path
                 pass
@@ -557,7 +557,7 @@ class TestWatchdogGuardrails(unittest.TestCase):
                 call_count[0] += 1
                 return VISYNC_SIZE_LIMIT + 1 if call_count[0] <= 2 else 100
 
-            with patch("src.finder._dir_size", side_effect=fake_size):
+            with patch("visync.finder._dir_size", side_effect=fake_size):
                 visync_watchdog(drive, allow_wipe=True)
             self.assertFalse((drive / ".visync").exists())
             _ok("Full wipe succeeded with valid .visync path")

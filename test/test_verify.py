@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.verify import *
+from visync.verify import *
 
 
 def _section(title: str) -> None:
@@ -337,7 +337,7 @@ class TestVerifyIso(unittest.TestCase):
         p.write_bytes(data)
         return p
 
-    @patch("src.verify.urlopen")
+    @patch("visync.verify.urlopen")
     def test_verify_matching_hash(self, mock_urlopen: MagicMock) -> None:
         _section("verify_iso: Matching Hash")
         data = b"debian-netinst bytes\n" * 1000
@@ -357,7 +357,7 @@ class TestVerifyIso(unittest.TestCase):
             self.assertTrue(result)
             _ok("ISO verified successfully against SHA256SUMS")
 
-    @patch("src.verify.urlopen")
+    @patch("visync.verify.urlopen")
     def test_verify_wrong_hash(self, mock_urlopen: MagicMock) -> None:
         _section("verify_iso: Wrong Hash")
         data = b"tampered content\n" * 500
@@ -377,7 +377,7 @@ class TestVerifyIso(unittest.TestCase):
             self.assertFalse(result)
             _ok("Wrong hash correctly rejected")
 
-    @patch("src.verify.urlopen")
+    @patch("visync.verify.urlopen")
     def test_network_failure_raises_unavailable(self, mock_urlopen: MagicMock) -> None:
         _section("verify_iso: Network Failure")
         mock_urlopen.side_effect = Exception("connection timeout")
@@ -387,7 +387,7 @@ class TestVerifyIso(unittest.TestCase):
                 verify_iso(iso, "https://example.com/SHA256SUMS")
             _ok("Network failure raises ChecksumUnavailable (file must be kept)")
 
-    @patch("src.verify.urlopen")
+    @patch("visync.verify.urlopen")
     def test_verify_json_format(self, mock_urlopen: MagicMock) -> None:
         _section("verify_iso: JSON Format (Tails)")
         data = b"tails iso bytes\n" * 200
@@ -407,7 +407,7 @@ class TestVerifyIso(unittest.TestCase):
             self.assertTrue(result)
             _ok("JSON checksum format verified end-to-end")
 
-    @patch("src.verify.urlopen")
+    @patch("visync.verify.urlopen")
     def test_unknown_format_raises_unavailable(self, mock_urlopen: MagicMock) -> None:
         _section("verify_iso: Unknown Format")
         mock_resp = MagicMock()
@@ -421,7 +421,7 @@ class TestVerifyIso(unittest.TestCase):
                 verify_iso(iso, "https://example.com/x", checksum_format="unknown")
             _ok("Unknown format raises ChecksumUnavailable (file must be kept)")
 
-    @patch("src.verify.urlopen")
+    @patch("visync.verify.urlopen")
     def test_missing_entry_raises_unavailable(self, mock_urlopen: MagicMock) -> None:
         """ISO absent from the sums file is 'unavailable', not a mismatch."""
         mock_resp = MagicMock()

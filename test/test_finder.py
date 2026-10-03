@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.finder import *
+from visync.finder import *
 
 
 def _detect_ventoy() -> tuple[bool, list[Path]]:

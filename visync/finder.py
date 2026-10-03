@@ -15,7 +15,7 @@ from pathlib import Path
 
 from rich.markup import escape as _escape
 
-from src.output import console
+from visync.output import console
 
 _CONFIG_CACHE: dict | None = None
 
@@ -26,6 +26,36 @@ def reset_config_cache() -> None:
     _CONFIG_CACHE = None
 
 
+def _packaged_config() -> Path:
+    """Path of the config shipped with the installed package.
+
+    Wheels install config.toml as visync/config.toml, beside the modules.
+    importlib.resources resolves it so a zip-imported package still works; the
+    filesystem path is returned because every caller treats the config as a real
+    file (open, rewrite, --config round-trips).
+
+    An editable install and a bare source checkout instead have config.toml at
+    the repository root, so that layout is returned as the fallback rather than
+    letting discovery fall through to the current working directory — otherwise
+    running from an unrelated directory would silently find no config.
+    """
+    beside_package = Path(__file__).parent / "config.toml"
+    if beside_package.is_file():
+        return beside_package
+
+    try:
+        from importlib.resources import files
+
+        resource = Path(str(files("visync").joinpath("config.toml")))
+        if resource.is_file():
+            return resource
+    except (ImportError, ModuleNotFoundError, FileNotFoundError, TypeError):
+        pass
+
+    # Editable install / source checkout: one level above the package.
+    return Path(__file__).parent.parent / "config.toml"
+
+
 def _config_candidates() -> list[Path]:
     """Config search order: env override, user config, packaged config, cwd last."""
     candidates = []
@@ -33,7 +63,7 @@ def _config_candidates() -> list[Path]:
     if env_path:
         candidates.append(Path(env_path))
     candidates.append(Path.home() / ".config" / "visync" / "config.toml")
-    candidates.append(Path(__file__).parent.parent / "config.toml")
+    candidates.append(_packaged_config())
     candidates.append(Path.cwd() / "config.toml")
     return candidates
 
@@ -54,17 +84,31 @@ def load_config(config_path: Path | None = None) -> dict:
                 config_path = candidate
                 break
         else:
-            config_path = Path.cwd() / "config.toml"
+            # No candidate existed. Report where we looked rather than falling
+            # through to a bare cwd path, which used to surface as the
+            # misleading "Failed to parse config.toml: ... No such file".
+            searched = ", ".join(str(c) for c in _config_candidates())
             if os.environ.get("VISYNC_CONFIG"):
                 console.print(
                     "  [yellow]⚠[/yellow] VISYNC_CONFIG is set but the file does "
-                    "not exist — falling back to the default config."
+                    "not exist."
                 )
+            console.print(f"  [red]✗[/red] No config.toml found. Searched: {searched}")
+            console.print("  [dim]Set VISYNC_CONFIG or pass --config.[/dim]")
+            return {}
     try:
         with open(config_path, "rb") as f:
             data = tomllib.load(f)
-    except Exception as e:
-        console.print(f"  [red]✗[/red] Failed to parse config.toml: {_escape(str(e))}")
+    except FileNotFoundError as e:
+        console.print(f"  [red]✗[/red] Config not found: {_escape(str(e))}")
+        return {}
+    except tomllib.TOMLDecodeError as e:
+        console.print(
+            f"  [red]✗[/red] Invalid TOML in {config_path}: {_escape(str(e))}"
+        )
+        return {}
+    except OSError as e:
+        console.print(f"  [red]✗[/red] Failed to read config.toml: {_escape(str(e))}")
         return {}
     _CONFIG_CACHE = data
     return data

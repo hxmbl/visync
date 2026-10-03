@@ -9,9 +9,9 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.download import DistroCheck, SyncStatus
-from src.finder import load_config
-from src.pm import (
+from visync.download import DistroCheck, SyncStatus
+from visync.finder import load_config
+from visync.pm import (
     get_installed_ids,
     load_installed,
     mark_installed,
@@ -200,14 +200,14 @@ class TestResolveDistro(unittest.TestCase):
 
 class TestSearchCommand(unittest.TestCase):
     def setUp(self):
-        from src.main import app
+        from visync.main import app
 
         self.app = app
         from typer.testing import CliRunner
 
         self.runner = CliRunner()
 
-    @patch("src.main.find_ventoy_drives")
+    @patch("visync.main.find_ventoy_drives")
     def test_search_lists_all(self, mock_drives):
         """search without args lists all distros."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -218,7 +218,7 @@ class TestSearchCommand(unittest.TestCase):
             self.assertIn("Arch Linux", result.stdout)
             self.assertIn("NixOS", result.stdout)
 
-    @patch("src.main.find_ventoy_drives")
+    @patch("visync.main.find_ventoy_drives")
     def test_search_with_query(self, mock_drives):
         """search with query filters results."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -227,7 +227,7 @@ class TestSearchCommand(unittest.TestCase):
             self.assertEqual(result.exit_code, 0)
             self.assertIn("NixOS", result.stdout)
 
-    @patch("src.main.find_ventoy_drives")
+    @patch("visync.main.find_ventoy_drives")
     def test_search_shows_installed_marker(self, mock_drives):
         """search shows + marker for installed distros."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -239,7 +239,7 @@ class TestSearchCommand(unittest.TestCase):
             # Arch Linux should have + marker
             self.assertIn("+", result.stdout)
 
-    @patch("src.main.find_ventoy_drives")
+    @patch("visync.main.find_ventoy_drives")
     def test_search_not_found(self, mock_drives):
         """search with bad query shows error message."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -250,14 +250,14 @@ class TestSearchCommand(unittest.TestCase):
 
 class TestInfoCommand(unittest.TestCase):
     def setUp(self):
-        from src.main import app
+        from visync.main import app
 
         self.app = app
         from typer.testing import CliRunner
 
         self.runner = CliRunner()
 
-    @patch("src.main.find_ventoy_drives")
+    @patch("visync.main.find_ventoy_drives")
     def test_info_shows_distro(self, mock_drives):
         """info shows distro details."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -267,7 +267,7 @@ class TestInfoCommand(unittest.TestCase):
             self.assertIn("Tails", result.stdout)
             self.assertIn("tails_api", result.stdout)
 
-    @patch("src.main.find_ventoy_drives")
+    @patch("visync.main.find_ventoy_drives")
     def test_info_installed_status(self, mock_drives):
         """info shows installed status."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -278,7 +278,7 @@ class TestInfoCommand(unittest.TestCase):
             self.assertEqual(result.exit_code, 0)
             self.assertIn("installed", result.stdout)
 
-    @patch("src.main.find_ventoy_drives")
+    @patch("visync.main.find_ventoy_drives")
     def test_info_not_found(self, mock_drives):
         """info with bad name shows error."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -289,14 +289,14 @@ class TestInfoCommand(unittest.TestCase):
 
 class TestAutodetectCommand(unittest.TestCase):
     def setUp(self):
-        from src.main import app
+        from visync.main import app
 
         self.app = app
         from typer.testing import CliRunner
 
         self.runner = CliRunner()
 
-    @patch("src.main.find_ventoy_drives")
+    @patch("visync.main.find_ventoy_drives")
     def test_autodetect_empty_drive(self, mock_drives):
         """autodetect on empty drive finds nothing."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -306,8 +306,8 @@ class TestAutodetectCommand(unittest.TestCase):
             self.assertEqual(result.exit_code, 0)
             self.assertIn("No new distros detected", result.stdout)
 
-    @patch("src.main.get_iso_volume_id")
-    @patch("src.main.find_ventoy_drives")
+    @patch("visync.main.get_iso_volume_id")
+    @patch("visync.main.find_ventoy_drives")
     def test_autodetect_finds_iso(self, mock_drives, mock_vid):
         """autodetect registers ISOs found on drive."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -320,8 +320,8 @@ class TestAutodetectCommand(unittest.TestCase):
             installed = load_installed(drive)
             self.assertIn("ArchLinux", installed)
 
-    @patch("src.main.get_iso_volume_id")
-    @patch("src.main.find_ventoy_drives")
+    @patch("visync.main.get_iso_volume_id")
+    @patch("visync.main.find_ventoy_drives")
     def test_autodetect_skips_already_registered(self, mock_drives, mock_vid):
         """autodetect skips distros already in installed.json."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -337,14 +337,14 @@ class TestAutodetectCommand(unittest.TestCase):
 
 class TestRemoveCommand(unittest.TestCase):
     def setUp(self):
-        from src.main import app
+        from visync.main import app
 
         self.app = app
         from typer.testing import CliRunner
 
         self.runner = CliRunner()
 
-    @patch("src.main.find_ventoy_drives")
+    @patch("visync.main.find_ventoy_drives")
     def test_remove_deletes_file(self, mock_drives):
         """remove deletes the ISO file from drive."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -353,7 +353,7 @@ class TestRemoveCommand(unittest.TestCase):
             _make_iso(drive, "archlinux-2026.06.01-x86_64.iso")
             _write_installed(drive, {"ArchLinux": {"version": "2026.06.01"}})
             with patch(
-                "src.main.get_iso_volume_id",
+                "visync.main.get_iso_volume_id",
                 return_value="Arch Linux 2026.06.01 x86_64",
             ):
                 result = self.runner.invoke(self.app, ["remove", "archlinux", "--yes"])
@@ -362,7 +362,7 @@ class TestRemoveCommand(unittest.TestCase):
             installed = load_installed(drive)
             self.assertNotIn("ArchLinux", installed)
 
-    @patch("src.main.find_ventoy_drives")
+    @patch("visync.main.find_ventoy_drives")
     def test_remove_not_found(self, mock_drives):
         """remove with no matching files warns."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -378,14 +378,14 @@ class TestRemoveCommand(unittest.TestCase):
 
 class TestSyncFiltering(unittest.TestCase):
     def setUp(self):
-        from src.main import app
+        from visync.main import app
 
         self.app = app
         from typer.testing import CliRunner
 
         self.runner = CliRunner()
 
-    @patch("src.main.find_ventoy_drives")
+    @patch("visync.main.find_ventoy_drives")
     def test_sync_no_installed_shows_message(self, mock_drives):
         """sync with no installed distros shows hint."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -395,8 +395,8 @@ class TestSyncFiltering(unittest.TestCase):
             self.assertEqual(result.exit_code, 0)
             self.assertIn("No distros installed", result.stdout)
 
-    @patch("src.main.find_ventoy_drives")
-    @patch("src.download.sync_all_configured_distros")
+    @patch("visync.main.find_ventoy_drives")
+    @patch("visync.download.sync_all_configured_distros")
     def test_sync_all_bypasses_installed_filter(self, mock_sync, mock_drives):
         """sync --all does not filter by installed list."""
         # (download_dir, downloaded, unreachable)
@@ -409,8 +409,8 @@ class TestSyncFiltering(unittest.TestCase):
             self.assertNotIn("No distros installed", result.stdout)
             mock_sync.assert_called_once()
 
-    @patch("src.main.find_ventoy_drives")
-    @patch("src.download.sync_all_configured_distros")
+    @patch("visync.main.find_ventoy_drives")
+    @patch("visync.download.sync_all_configured_distros")
     def test_sync_exits_nonzero_when_a_distro_is_unreachable(
         self, mock_sync, mock_drives
     ):
@@ -425,10 +425,10 @@ class TestSyncFiltering(unittest.TestCase):
             self.assertIn("Ubuntu Server", result.stdout)
             self.assertIn("HTTP Error 404", result.stdout)
 
-    @patch("src.download._sweep_old_versions")
-    @patch("src.download.visync_watchdog")
-    @patch("src.download._check_distro")
-    @patch("src.download.load_config")
+    @patch("visync.download._sweep_old_versions")
+    @patch("visync.download.visync_watchdog")
+    @patch("visync.download._check_distro")
+    @patch("visync.download.load_config")
     def test_sync_reports_entry_ids_missing_from_config(
         self, mock_cfg, mock_check, _wd, _sweep
     ):
@@ -446,7 +446,7 @@ class TestSyncFiltering(unittest.TestCase):
             (drive / ".visync").mkdir(exist_ok=True)
             (drive / ".visync" / "installed.json").write_text('{"Omarchy": {}}')
 
-            from src.download import sync_all_configured_distros
+            from visync.download import sync_all_configured_distros
 
             _dir, _dl, failures = sync_all_configured_distros(
                 dry_run=True,
@@ -467,7 +467,7 @@ class TestSyncFiltering(unittest.TestCase):
 class TestImgFileSupport(unittest.TestCase):
     def test_find_installed_isos_finds_img(self):
         """find_installed_isos finds .img files."""
-        from src.finder import find_installed_isos
+        from visync.finder import find_installed_isos
 
         with tempfile.TemporaryDirectory() as tmp:
             drive = Path(tmp)
@@ -480,7 +480,7 @@ class TestImgFileSupport(unittest.TestCase):
 
     def test_find_installed_isos_skips_visync(self):
         """find_installed_isos ignores .visync directory."""
-        from src.finder import find_installed_isos
+        from visync.finder import find_installed_isos
 
         with tempfile.TemporaryDirectory() as tmp:
             drive = Path(tmp)
@@ -494,7 +494,7 @@ class TestImgFileSupport(unittest.TestCase):
 
     def test_find_installed_isos_skips_resource_forks(self):
         """find_installed_isos ignores macOS resource forks."""
-        from src.finder import find_installed_isos
+        from visync.finder import find_installed_isos
 
         with tempfile.TemporaryDirectory() as tmp:
             drive = Path(tmp)
@@ -510,7 +510,7 @@ class TestImgFileSupport(unittest.TestCase):
 class TestCleanFlag(unittest.TestCase):
     def test_sweep_dry_run_by_default(self):
         """_sweep_old_versions dry-runs without clean flag."""
-        from src.download import _sweep_old_versions
+        from visync.download import _sweep_old_versions
 
         with tempfile.TemporaryDirectory() as tmp:
             drive = Path(tmp)
@@ -524,7 +524,7 @@ class TestCleanFlag(unittest.TestCase):
 
     def test_sweep_clean_removes_old(self):
         """_sweep_old_versions with clean=True removes old versions."""
-        from src.download import _sweep_old_versions
+        from visync.download import _sweep_old_versions
 
         with tempfile.TemporaryDirectory() as tmp:
             drive = Path(tmp)
@@ -540,10 +540,10 @@ class TestCleanFlag(unittest.TestCase):
 
 
 class TestDownloadFailure(unittest.TestCase):
-    @patch("src.download.shutil.disk_usage")
+    @patch("visync.download.shutil.disk_usage")
     def test_download_returns_false_on_no_space(self, mock_disk):
         """download_iso returns False when disk space is insufficient."""
-        from src.download import download_iso
+        from visync.download import download_iso
 
         mock_disk.return_value = MagicMock(free=100)  # 100 bytes free
         with tempfile.TemporaryDirectory() as tmp:
@@ -552,11 +552,11 @@ class TestDownloadFailure(unittest.TestCase):
             self.assertFalse(result)
             self.assertFalse(dest.exists())
 
-    @patch("src.download.shutil.disk_usage")
-    @patch("src.download.urllib.request.urlopen")
+    @patch("visync.download.shutil.disk_usage")
+    @patch("visync.download.urllib.request.urlopen")
     def test_download_returns_true_on_success(self, mock_urlopen, mock_disk):
         """download_iso returns True on successful download."""
-        from src.download import download_iso
+        from visync.download import download_iso
 
         mock_disk.return_value = MagicMock(free=10 * 1024**3)  # 10GB free
         # Mock HEAD request for size check

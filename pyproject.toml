@@ -6,7 +6,28 @@ build-backend = "hatchling.build"
 name = "visync"
 version = "0.1.0"
 description = "Ventoy ISO Synchronization Tool"
+readme = "README.md"
 requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "hxmbl" }]
+keywords = ["ventoy", "iso", "linux", "usb", "package-manager", "checksum"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Archiving :: Backup",
+    "Topic :: System :: Filesystems",
+    "Topic :: Utilities",
+]
 dependencies = [
     "typer>=0.12",
     "rich>=13.0",
@@ -22,10 +43,33 @@ dev = [
 ]
 
 [project.scripts]
-visync = "src.main:app"
+visync = "visync.main:app"
+
+[project.urls]
+Homepage = "https://github.com/hxmbl/visync"
+Repository = "https://github.com/hxmbl/visync"
+Issues = "https://github.com/hxmbl/visync/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src"]
+packages = ["visync"]
+
+# config.toml lives at the repo root so `pip install -e .` and a source
+# checkout can read it, and is copied into the wheel as visync/config.toml so an
+# installed visync finds it beside its own modules. Both layouts resolve through
+# finder._config_candidates(); keep the two in sync.
+[tool.hatch.build.targets.wheel.force-include]
+"config.toml" = "visync/config.toml"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/visync",
+    "/test",
+    "/config.toml",
+    "/README.md",
+    "/LICENSE",
+    "/pyproject.toml",
+    "/uv.lock",
+]
 
 [tool.ruff]
 line-length = 88
@@ -41,7 +85,7 @@ ignore = [
 ]
 
 [tool.pyright]
-include = ["src"]
+include = ["visync"]
 typeCheckingMode = "basic"
 pythonVersion = "3.11"
 
