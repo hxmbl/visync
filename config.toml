@@ -90,6 +90,8 @@ keyword = "live-server"
 strategy = "ubuntu_nested"
 base_url = "https://releases.ubuntu.com/"
 version_regex = 'href="([0-9\.]+)/"'
+# Current Ubuntu LTS only — see UbuntuDesktop for the rationale.
+version_filter = '\d*[02468]\.04(\.\d+)*'
 iso_regex = 'href="(ubuntu-[0-9\.-]+live-server-amd64\.iso)"'
 checksum_url = "{base_url}{version}/SHA256SUMS"
 checksum_format = "sha256sums"
@@ -156,6 +158,11 @@ keyword = "desktop"
 strategy = "ubuntu_nested"
 base_url = "https://releases.ubuntu.com/"
 version_regex = 'href="([0-9\.]+)/"'
+# Track the current Ubuntu LTS rather than the newest release of any kind.
+# LTS is an even-numbered year with a .04 month; interim releases (26.10,
+# 25.10, ...) are excluded. Point releases like 26.04.1 also match, which is
+# what we want — those are the same LTS series.
+version_filter = '\d*[02468]\.04(\.\d+)*'
 iso_regex = 'href="(ubuntu-[0-9\.-]+desktop-amd64\.iso)"'
 checksum_url = "{base_url}{version}/SHA256SUMS"
 checksum_format = "sha256sums"
@@ -188,9 +195,22 @@ signing_key_fingerprint = [
 clean_name = "NixOS Minimal"
 keyword = "nixos-minimal"
 strategy = "nixos_channel"
-base_url = "https://channels.nixos.org/nixos-26.05"
+# base_url is a prefix: the current stable channel (e.g. 26.05) is appended,
+# giving https://channels.nixos.org/nixos-26.05, which redirects to the exact
+# releases.nixos.org directory. NixOS publishes no nixos-stable alias, so the
+# channel is resolved from the release bucket at scrape time — see
+# nixos_channel in src/download.py.
+base_url = "https://channels.nixos.org/nixos"
+# Optional pin. If set and still a real channel it wins; otherwise the newest
+# stable channel from the bucket is used. Omit to always track latest stable.
+# channel = "26.05"
 variant = "minimal"
-checksum_url = "{base_url}/{iso_name}.sha256"
+# ISOs and .sha256 sidecars live under releases.nixos.org, NOT the channel host
+# (channels.nixos.org serves no .sha256, which made `visync verify` fail with
+# "source unreachable" for every NixOS ISO).
+releases_base_url = "https://releases.nixos.org"
+# Sidecars sit at /nixos/<channel>/nixos-<full release>/<iso>.sha256
+checksum_url = "{release_base_url}/nixos/{version}/nixos-{release}/{iso_name}.sha256"
 checksum_format = "sha256sums"
 checksum_algo = "sha256"
 
@@ -198,21 +218,21 @@ checksum_algo = "sha256"
 clean_name = "NixOS Graphical"
 keyword = "nixos-graphical"
 strategy = "nixos_channel"
-base_url = "https://channels.nixos.org/nixos-26.05"
+base_url = "https://channels.nixos.org/nixos"
 variant = "graphical"
-checksum_url = "{base_url}/{iso_name}.sha256"
+releases_base_url = "https://releases.nixos.org"
+checksum_url = "{release_base_url}/nixos/{version}/nixos-{release}/{iso_name}.sha256"
 checksum_format = "sha256sums"
 checksum_algo = "sha256"
 
-[distros.Omarchy]
-clean_name = "Omarchy"
-keyword = "omarchy"
-strategy = "direct_match"
-base_url = "https://iso.omarchy.org/"
-iso_regex = '(omarchy-[0-9\.]+\.iso)'
-checksum_format = "sha256sums"
-checksum_algo = "sha256"
-checksum_url = "{base_url}{iso_name}.sha256"
+# NOTE: Omarchy was removed. https://iso.omarchy.org/ returns HTTP 404 for
+# every path tried, including /index.html and /latest/. The per-version ISOs
+# still exist (e.g. /omarchy-4.0.1.iso serves a 6 GB file) but there is no
+# index page for direct_match to scrape, and no JSON manifest or release feed
+# was found to replace it. Guessing a version would mean trusting an
+# unverifiable pointer, so the scraper would fail closed instead.
+# Re-add here if Omarchy publishes a browsable index or a machine-readable
+# release feed.
 
 [distros.PopOS]
 clean_name = "Pop!_OS"

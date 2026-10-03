@@ -429,6 +429,11 @@ def extract_iso_metadata(iso_name: str) -> dict[str, str]:
         "arch": "",
         "variant_dir": "",
         "checksum_stem": "",
+        # Full YY.MM channel ("26.05") and full release id
+        # ("26.05.11045.774debe7a0d1"). NixOS checksum URLs need both, and
+        # extract_version_from_filename only recovers "26.05.11045".
+        "channel": "",
+        "release": "",
     }
 
     fedora = re.match(
@@ -472,22 +477,46 @@ def extract_iso_metadata(iso_name: str) -> dict[str, str]:
         meta["version"] = arch.group(1)
         return meta
 
+    nixos = re.match(
+        r"^nixos-(?:minimal|graphical)-(\d+\.\d+)\.(\d+)\.([a-f0-9]+)"
+        r"(?:-[a-z0-9_]+)*\.iso$",
+        iso_name,
+        re.IGNORECASE,
+    )
+    if nixos:
+        channel = f"{nixos.group(1)}"
+        meta["version"] = channel
+        meta["channel"] = channel
+        meta["release"] = f"{channel}.{nixos.group(2)}.{nixos.group(3)}"
+        return meta
+
     generic = re.search(r"(\d+\.\d+(?:\.\d+)?)", iso_name)
     if generic:
         meta["version"] = generic.group(1)
     return meta
 
 
-def expand_url(template: str, iso_name: str, base_url: str = "") -> str:
+def expand_url(
+    template: str, iso_name: str, base_url: str = "", release_base_url: str = ""
+) -> str:
     base = base_url.rstrip("/")
     meta = extract_iso_metadata(iso_name)
     expanded = template.replace("{iso_name}", iso_name)
     expanded = expanded.replace("{base_url}/", base + "/")
     expanded = expanded.replace("{base_url}", base + "/")
+    if "{release_base_url}" in template:
+        # Explicit, so a checksum can live on a different host than base_url
+        # (NixOS publishes ISOs under releases.nixos.org while the channel page
+        # is on channels.nixos.org).
+        release_base = str(release_base_url or base).rstrip("/")
+        expanded = expanded.replace("{release_base_url}/", release_base + "/")
+        expanded = expanded.replace("{release_base_url}", release_base + "/")
     expanded = expanded.replace("{version}", meta["version"])
     expanded = expanded.replace("{arch}", meta["arch"])
     expanded = expanded.replace("{variant_dir}", meta["variant_dir"])
     expanded = expanded.replace("{checksum_stem}", meta["checksum_stem"])
+    expanded = expanded.replace("{channel}", meta["channel"])
+    expanded = expanded.replace("{release}", meta["release"])
     return expanded
 
 
@@ -606,7 +635,12 @@ def verify_from_config(
 
     iso_name = iso_path.name
     base_url = distro_config.get("base_url", "")
-    checksum_url = expand_url(checksum_url, iso_name, base_url)
+    checksum_url = expand_url(
+        checksum_url,
+        iso_name,
+        base_url,
+        str(distro_config.get("releases_base_url") or ""),
+    )
 
     algo = distro_config.get("checksum_algo", "sha256")
     fmt = distro_config.get("checksum_format", "sha256sums")

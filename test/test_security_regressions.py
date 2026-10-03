@@ -5,6 +5,7 @@ Each test maps to an audit finding ID (C1..C3, H1..H4, M1..M6, L1..L13).
 
 import json
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -26,10 +27,10 @@ from src.download import (
     _sweep_old_versions,
     sync_all_configured_distros,
 )
-from src.finder import _dir_size, keyword_hit
+from src.finder import _dir_size, keyword_hit, load_config
 from src.output import console, error, info, removed, success, warn
 from src.pm import load_installed
-from src.verify import ChecksumUnavailable
+from src.verify import ChecksumUnavailable, expand_url, extract_iso_metadata
 
 ISO_VID_OFFSET = 32808
 
@@ -1079,3 +1080,251 @@ class TestWatchdogSkipsNonJson(unittest.TestCase):
 
             self.assertFalse(orphan.exists(), "orphaned metadata must be deep-cleaned")
             self.assertTrue(visync_dir.exists(), "deep clean must not wipe the dir")
+
+
+# ── Upstream selection: LTS filter + dynamic NixOS stable channel ─────────────
+
+
+class TestUbuntuLtsVersionFilter(unittest.TestCase):
+    """releases.ubuntu.com lists interim releases too, and during a beta cycle
+    the newest directory contains only `-beta-` ISOs, so the regex matched
+    nothing and Ubuntu Server/Desktop silently stopped updating."""
+
+    INDEX = (
+        '<a href="14.04/">x</a><a href="14.04.6/">x</a><a href="16.04/">x</a>'
+        '<a href="18.04/">x</a><a href="20.04/">x</a><a href="20.04.6/">x</a>'
+        '<a href="22.04/">x</a><a href="22.04.5/">x</a><a href="24.04/">x</a>'
+        '<a href="24.04.5/">x</a><a href="25.10/">x</a><a href="26.04/">x</a>'
+        '<a href="26.04.1/">x</a><a href="26.10/">x</a>'
+    )
+
+    def _strategy(self, iso_regex, filter_regex):
+        return {
+            "strategy": "ubuntu_nested",
+            "base_url": "https://releases.ubuntu.com/",
+            "version_regex": r'href="([0-9\.]+)/"',
+            "version_filter": filter_regex,
+            "iso_regex": iso_regex,
+        }
+
+    @patch("src.download.ping_mirror", return_value=True)
+    @patch("src.download.fetch_html")
+    def test_picks_newest_lts_not_newest_release(self, mock_fetch, _ping):
+        mock_fetch.side_effect = [
+            self.INDEX,
+            '<a href="ubuntu-26.04.1-desktop-amd64.iso">x</a>',
+        ]
+        name, url = dl.process_scraping_strategy(
+            "Ubuntu Desktop",
+            self._strategy(
+                r'href="(ubuntu-[0-9\.-]+desktop-amd64\.iso)"',
+                r"\d*[02468]\.04(\.\d+)*",
+            ),
+        )
+        self.assertEqual(name, "ubuntu-26.04.1-desktop-amd64.iso")
+        self.assertIn("/26.04.1/", url)
+        print("interim 25.10/26.10 skipped, newest LTS 26.04.1 chosen")
+
+    @patch("src.download.ping_mirror", return_value=True)
+    @patch("src.download.fetch_html")
+    def test_lts_filter_rejects_interim_only_release(self, mock_fetch, _ping):
+        """A filter matching nothing must fail closed, not fall back."""
+        mock_fetch.return_value = self.INDEX
+        settings = self._strategy(
+            r'href="(ubuntu-[0-9\.-]+desktop-amd64\.iso)"', r"99\.99"
+        )
+        dl.process_scraping_strategy("Ubuntu Desktop", settings)
+        self.assertIn("version_filter", settings.get("resolve_error", ""))
+        print("empty filter result reported, no fallback to 26.10")
+
+    def test_shipped_ubuntu_filter_is_lts_only(self):
+        """Guard the real config: both Ubuntu entries must be LTS-pinned."""
+        cfg = load_config()
+        for key in ("UbuntuDesktop", "UbuntuServer"):
+            with self.subTest(entry=key):
+                entry = cfg["distros"][key]
+                self.assertIn("version_filter", entry)
+                pattern = entry["version_filter"]
+                for version, expect in [
+                    ("26.04.1", True),
+                    ("24.04", True),
+                    ("26.10", False),
+                    ("25.10", False),
+                    ("25.04", False),
+                    ("26.04.1-beta", False),
+                ]:
+                    self.assertEqual(
+                        bool(re.fullmatch(pattern, version)),
+                        expect,
+                        f"{key}: {version} should "
+                        f"{'match' if expect else 'not match'} {pattern!r}",
+                    )
+        print("shipped version_filter accepts only even-year .04 LTS series")
+
+
+class TestNixosStableChannelDiscovery(unittest.TestCase):
+    """NixOS publishes no nixos-stable alias, so the current stable channel is
+    derived from the release bucket. It must fail closed rather than guess."""
+
+    LISTING = "".join(
+        f"<Prefix>nixos/{v}/</Prefix>"
+        for v in (
+            "20.09",
+            "20.09-aarch64",
+            "24.11",
+            "25.05",
+            "25.11",
+            "26.05",
+            "26.05-aarch64",
+            "26.05-small",
+        )
+    )
+
+    def test_picks_newest_stable_excluding_small_and_aarch64(self):
+        with patch.object(dl, "fetch_html", return_value=self.LISTING):
+            channel, err = dl._nixos_stable_channel({})
+        self.assertEqual(channel, "26.05")
+        self.assertEqual(err, "")
+        print("-small and -aarch64 trees ignored")
+
+    def test_future_channel_wins_when_newer(self):
+        listing = "<Prefix>nixos/26.05/</Prefix><Prefix>nixos/26.11/</Prefix>"
+        with patch.object(dl, "fetch_html", return_value=listing):
+            channel, _ = dl._nixos_stable_channel({})
+        self.assertEqual(channel, "26.11", "must track a new stable automatically")
+
+    def test_channel_pin_wins_while_still_real(self):
+        with patch.object(dl, "fetch_html", return_value=self.LISTING):
+            channel, _ = dl._nixos_stable_channel({"channel": "25.11"})
+        self.assertEqual(channel, "25.11")
+
+    def test_retired_channel_pin_falls_back(self):
+        listing = "<Prefix>nixos/26.05/</Prefix>"
+        with patch.object(dl, "fetch_html", return_value=listing):
+            channel, _ = dl._nixos_stable_channel({"channel": "19.04"})
+        self.assertEqual(channel, "26.05")
+
+    @patch("src.download.ping_mirror", return_value=True)
+    @patch("src.download.fetch_html", return_value="")
+    def test_unreachable_listing_is_reported(self, _fetch, _ping):
+        settings = {
+            "strategy": "nixos_channel",
+            "base_url": "https://channels.nixos.org/nixos",
+        }
+        dl.process_scraping_strategy("NixOS", settings)
+        self.assertIn("release listing", settings.get("resolve_error", ""))
+        print("listing failure surfaces, no channel guessed")
+
+    @patch("src.download.ping_mirror", return_value=True)
+    @patch("src.download.fetch_html", return_value="<html>nothing useful</html>")
+    def test_listing_without_channels_is_reported(self, _fetch, _ping):
+        settings = {
+            "strategy": "nixos_channel",
+            "base_url": "https://channels.nixos.org/nixos",
+        }
+        dl.process_scraping_strategy("NixOS", settings)
+        self.assertIn("channels", settings.get("resolve_error", ""))
+
+    @patch("src.download.ping_mirror", return_value=True)
+    @patch(
+        "src.download.fetch_html",
+        return_value="<Prefix>nixos/99.99/</Prefix><Prefix>nixos/26.05/</Prefix>",
+    )
+    def test_implausible_channel_is_refused(self, _fetch, _ping):
+        settings = {
+            "strategy": "nixos_channel",
+            "base_url": "https://channels.nixos.org/nixos",
+        }
+        dl.process_scraping_strategy("NixOS", settings)
+        self.assertIn("implausible", settings.get("resolve_error", ""))
+        print("bogus listing cannot redirect the download URL")
+
+    @patch("src.download.ping_mirror", return_value=True)
+    @patch("src.download.fetch_html")
+    def test_channel_release_mismatch_is_refused(self, mock_fetch, _ping):
+        """If the channel page names a different series, stop."""
+        listing = "<Prefix>nixos/26.05/</Prefix>"
+        page = "nixos-25.11 release nixos-25.11.12484.b6018f87da91 released 2026-01-01"
+
+        def _fetch(url):
+            return listing if "s3.amazonaws" in url else page
+
+        mock_fetch.side_effect = _fetch
+        settings = {
+            "strategy": "nixos_channel",
+            "base_url": "https://channels.nixos.org/nixos",
+            "variant": "graphical",
+        }
+        dl.process_scraping_strategy("NixOS", settings)
+        self.assertIn("mismatch", settings.get("resolve_error", ""))
+
+
+class TestNixosChecksumUrls(unittest.TestCase):
+    """The .sha256 sidecars live under releases.nixos.org, not the channel host,
+    and need both the channel and the full release id in the path."""
+
+    RELEASE = "26.05.11045.774debe7a0d1"
+
+    def test_expands_to_real_sidecar_path(self):
+        iso = f"nixos-graphical-{self.RELEASE}-x86_64-linux.iso"
+        url = expand_url(
+            "{release_base_url}/nixos/{version}/nixos-{release}/{iso_name}.sha256",
+            iso,
+            "https://channels.nixos.org/nixos",
+            "https://releases.nixos.org",
+        )
+        self.assertEqual(
+            url,
+            f"https://releases.nixos.org/nixos/26.05/nixos-{self.RELEASE}/{iso}.sha256",
+        )
+
+    def test_metadata_recovers_channel_and_release(self):
+        for variant in ("minimal", "graphical"):
+            with self.subTest(variant=variant):
+                meta = extract_iso_metadata(
+                    f"nixos-{variant}-{self.RELEASE}-x86_64-linux.iso"
+                )
+                self.assertEqual(meta["channel"], "26.05")
+                self.assertEqual(meta["release"], self.RELEASE)
+
+    def test_non_nixos_iso_leaves_channel_empty(self):
+        meta = extract_iso_metadata("archlinux-2026.10.01-x86_64.iso")
+        self.assertEqual(meta["channel"], "")
+        self.assertEqual(meta["release"], "")
+
+    def test_shipped_nixos_entries_use_releases_host(self):
+        cfg = load_config()
+        for key in ("NixOS", "NixOSGraphical"):
+            with self.subTest(entry=key):
+                entry = cfg["distros"][key]
+                self.assertEqual(
+                    entry.get("releases_base_url"), "https://releases.nixos.org"
+                )
+                self.assertIn("{release_base_url}", entry["checksum_url"])
+                iso = f"nixos-{entry['variant']}-{self.RELEASE}-x86_64-linux.iso"
+                url = expand_url(
+                    entry["checksum_url"],
+                    iso,
+                    entry["base_url"],
+                    entry.get("releases_base_url", ""),
+                )
+                self.assertTrue(url.startswith("https://releases.nixos.org/"))
+                self.assertNotIn("{", url, "no placeholder left unexpanded")
+        print("NixOS checksums resolve to releases.nixos.org")
+
+
+class TestRemovedDistros(unittest.TestCase):
+    def test_omarchy_absent_from_config(self):
+        cfg = load_config()
+        self.assertNotIn(
+            "Omarchy", cfg.get("distros", {}), "Omarchy entry must be removed"
+        )
+
+    def test_omarchy_removal_is_documented_in_place(self):
+        """Follows the Arch Linux ARM precedent: a NOTE explaining why."""
+        text = (
+            Path(__file__).resolve().parent.parent.joinpath("config.toml").read_text()
+        )
+        self.assertIn("NOTE: Omarchy was removed", text)
+        self.assertIn("iso.omarchy.org", text)
+        print("removal records the reason and a re-add condition")

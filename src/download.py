@@ -150,6 +150,63 @@ def _safe_filename(name: str) -> str:
     return name
 
 
+NIXOS_RELEASES_S3 = "https://nix-releases.s3.amazonaws.com/"
+# nixos/<YY.MM>/ are numbered stable releases. Suffixes mark non-stable or
+# non-default trees: -small is the minimal installer, -aarch64 the ARM build.
+# "unstable" is not a YY.MM channel and is deliberately excluded by this pattern.
+_NIXOS_CHANNEL_RE = re.compile(r"nixos/(\d{2}\.\d{2})/")
+
+# Plausibility ceiling for a NixOS channel year. NixOS releases twice a year and
+# 26.05 was newest when this was written, so anything past year 49 is a parsing
+# artefact or a hostile listing rather than a real channel. Guards against
+# pointing a download at an attacker-chosen path.
+_NIXOS_CHANNEL_MAX_YEAR = 49
+
+
+def _nixos_stable_channel(settings: dict) -> tuple[str, str]:
+    """Resolve the current stable NixOS release, e.g. ``("26.05", "26.05")``.
+
+    NixOS publishes no ``nixos-stable`` alias (404), so the current stable is
+    derived from the release bucket: the highest ``nixos/<YY.MM>/`` prefix,
+    excluding ``-small`` and ``-aarch64`` trees. An in-progress next release has
+    no YY.MM channel directory yet, so the newest one is always the current
+    stable — this tracks 26.11, 27.05 and later without a config edit.
+
+    Returns ``(channel, reason)``; *reason* is non-empty on failure.
+    """
+    listing_url = str(settings.get("releases_index_url") or NIXOS_RELEASES_S3)
+    prefix = str(settings.get("releases_index_prefix") or "nixos/")
+    if not prefix.endswith("/"):
+        prefix += "/"
+
+    listing = fetch_html(f"{listing_url}?delimiter=/&prefix={prefix}")
+    if not listing:
+        return "", f"could not fetch NixOS release listing {listing_url}"
+
+    channels = {m.group(1) for m in _NIXOS_CHANNEL_RE.finditer(listing)}
+    if not channels:
+        return "", f"no nixos/<YY.MM>/ channels found in the {listing_url} listing"
+
+    def _key(channel: str) -> tuple[int, int]:
+        major, _, minor = channel.partition(".")
+        return int(major), int(minor)
+
+    newest = max(channels, key=_key)
+    if _key(newest)[0] > _NIXOS_CHANNEL_MAX_YEAR:
+        return "", (
+            f"NixOS listing contains an implausible channel ({newest}); "
+            "refusing to guess"
+        )
+
+    # Prefer an explicit channel pin when it is still a real channel, so a
+    # deliberate config choice is respected until upstream supersedes it.
+    pinned = str(settings.get("channel") or "")
+    if pinned and pinned in channels:
+        return pinned, ""
+
+    return max(channels, key=_key), ""
+
+
 def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
     """Resolve specific folder parsing pipelines based on the configured strategy.
 
@@ -235,6 +292,17 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
         if not versions:
             return fail(f"no version directories matched at {base_url}")
 
+        # Optional release-family filter, applied before sorting so we pick the
+        # newest *matching* release rather than the newest overall.
+        filter_regex = str(settings.get("version_filter") or "")
+        if filter_regex:
+            versions = [v for v in versions if re.fullmatch(filter_regex, v)]
+            if not versions:
+                return fail(
+                    f"no version directories matched version_filter "
+                    f"{filter_regex!r} at {base_url}"
+                )
+
         versions.sort(key=lambda x: parse_version(x) or ())
         latest_version = versions[-1].rstrip("/")
 
@@ -250,12 +318,17 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
 
     # Strategy D: NixOS channel page — parse version, construct ISO URL
     elif strategy == "nixos_channel":
-        if not base_url:
-            warn(f"{name} — nixos_channel requires base_url")
+        # NixOS publishes no nixos-stable alias, so derive the current stable
+        # channel from the release bucket before touching the channel page.
+        channel, channel_err = _nixos_stable_channel(settings)
+        if channel_err:
+            return fail(channel_err)
+        channel_url = f"{base_url.rstrip('/')}-{channel}" if base_url else ""
+        if not channel_url:
             return fail("config incomplete: needs base_url")
-        html = fetch_html(base_url)
+        html = fetch_html(channel_url)
         if not html:
-            return fail(f"could not fetch channel page {base_url}")
+            return fail(f"could not fetch channel page {channel_url}")
 
         # The channel page contains text like "nixos-26.05 release nixos-26.05.1947.a0374025a863"
         version_match = re.search(
@@ -263,7 +336,7 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
         )
         if not version_match:
             warn(f"{name} — could not parse NixOS version from channel page")
-            return fail(f"could not parse release id from channel page {base_url}")
+            return fail(f"could not parse release id from channel page {channel_url}")
 
         full_version = version_match.group(1)  # e.g. "nixos-26.05.1947.a0374025a863"
         # Strip the "nixos-" prefix for constructing URLs
@@ -275,10 +348,18 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
         if not short_version_match:
             return fail(f"could not parse short version from {full_version!r}")
         short_version = short_version_match.group(1)  # e.g. "26.05"
+        if short_version != channel:
+            return fail(
+                f"channel {channel} resolved to release {short_version} — "
+                "mismatch, refusing to guess"
+            )
 
         variant = settings.get("variant", "minimal")  # "minimal" or "graphical"
         iso_filename = f"nixos-{variant}-{version_id}-x86_64-linux.iso"
-        iso_url = f"https://releases.nixos.org/nixos/{short_version}/{full_version}/{iso_filename}"
+        releases_base = str(
+            settings.get("releases_base_url") or "https://releases.nixos.org"
+        )
+        iso_url = f"{releases_base.rstrip('/')}/nixos/{short_version}/{full_version}/{iso_filename}"
 
         # Parse SHA-256 checksum from the channel page HTML table.
         # The page has rows: <td><a href='...'>FILENAME</a></td><td>SIZE</td><td><tt>HASH</tt></td>
