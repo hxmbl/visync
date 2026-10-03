@@ -26,22 +26,35 @@ for free.
 
 from unittest.mock import patch
 
-import visync.download
-import visync.finder
-import visync.main
+# The visync imports and the module table are built inside pytest_configure, not
+# at module scope. pytest loads plugins before pytest-cov starts measuring, so
+# importing visync here would mean every module-level line in download.py,
+# finder.py, main.py, net.py, output.py and verify.py ran before coverage began
+# and was reported as untested — which cost 11 points of coverage and failed the
+# --cov-fail-under=70 gate on every Python version. Deferring the import keeps
+# the first import inside the measured run, where the test suite does it anyway.
 
-# main.py and download.py both bind find_ventoy_drives into their own namespace
-# with `from visync.finder import ...`, so patching only visync.finder would leave
-# the two copies live and the stub would not actually simulate an empty machine.
-_DETECTION_ENTRY_POINTS = (
-    (visync.finder, "find_ventoy_drives"),
-    (visync.main, "find_ventoy_drives"),
-    (visync.download, "find_ventoy_drives"),
-)
+
+def _detection_entry_points():
+    """Every namespace that holds its own reference to find_ventoy_drives.
+
+    main.py and download.py bind it in with `from visync.finder import ...`, so
+    patching only visync.finder would leave two live copies behind and the stub
+    would not simulate an empty machine at all.
+    """
+    import visync.download
+    import visync.finder
+    import visync.main
+
+    return (
+        (visync.finder, "find_ventoy_drives"),
+        (visync.main, "find_ventoy_drives"),
+        (visync.download, "find_ventoy_drives"),
+    )
 
 
 def pytest_configure(config):
-    for module, name in _DETECTION_ENTRY_POINTS:
+    for module, name in _detection_entry_points():
         if not hasattr(module, name):
             continue
         started = patch.object(module, name, return_value=[])
