@@ -160,3 +160,7 @@ CI installs from the committed `uv.lock` so a dependency release cannot break th
 ```bash
 VISYNC_DEBUG=1 visync sync
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).
