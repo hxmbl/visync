@@ -7,7 +7,7 @@ name = "visync"
 version = "0.1.0"
 description = "Ventoy ISO Synchronization Tool"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.16"
 license = { text = "MIT" }
 authors = [{ name = "hxmbl" }]
 keywords = ["ventoy", "iso", "linux", "usb", "package-manager", "checksum"]
@@ -24,6 +24,8 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Topic :: System :: Archiving :: Backup",
     "Topic :: System :: Filesystems",
     "Topic :: Utilities",
