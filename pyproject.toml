@@ -7,7 +7,7 @@ name = "visync"
 version = "0.1.0"
 description = "Ventoy ISO Synchronization Tool"
 readme = "README.md"
-requires-python = ">=3.11,<3.16"
+requires-python = ">=3.12,<3.16"
 license = { text = "MIT" }
 authors = [{ name = "hxmbl" }]
 keywords = ["ventoy", "iso", "linux", "usb", "package-manager", "checksum"]
@@ -21,7 +21,6 @@ classifiers = [
     "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
@@ -75,7 +74,7 @@ include = [
 
 [tool.ruff]
 line-length = 88
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
 # S (bandit) and B (bugbear) are the security-relevant families and are enabled
@@ -181,7 +180,7 @@ ignore = [
 [tool.pyright]
 include = ["visync"]
 typeCheckingMode = "basic"
-pythonVersion = "3.11"
+pythonVersion = "3.12"
 
 [tool.pytest.ini_options]
 testpaths = ["test"]
