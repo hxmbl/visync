@@ -1889,6 +1889,7 @@ class TestConfigNameConsistency(unittest.TestCase):
             "nixos-graphical-26.05.11045-x86_64-linux.iso",
         ),
         "PopOS": ("Pop_OS 24.04 amd64", "pop-os_24.04_amd64_generic_24.iso"),
+        "Pond": ("", "pond-installer-0.1.4-x86_64.iso"),
         "Tails": ("", "tails-amd64-7.14.img"),
     }
 

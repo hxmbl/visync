@@ -460,6 +460,156 @@ class TestProcessScrapingStrategy(unittest.TestCase):
         _ok(f"aarch64 ISO resolved: {name}")
 
     @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.urllib.request.urlopen")
+    def test_content_disposition_strategy(self, mock_urlopen: MagicMock, mock_ping: MagicMock):
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.headers = {
+            "Content-Disposition": 'attachment; filename="pond-installer-0.1.4-x86_64.iso"'
+        }
+        mock_response.__enter__.return_value = mock_response
+        mock_urlopen.return_value = mock_response
+        settings = {
+            "strategy": "content_disposition",
+            "base_url": "https://releases.butterfly.so/iso/",
+            "iso_regex": r"^pond-installer-[0-9]+\.[0-9]+\.[0-9]+-x86_64\.iso$",
+        }
+        name, url = process_scraping_strategy("Pond Installer", settings)
+        self.assertEqual(name, "pond-installer-0.1.4-x86_64.iso")
+        self.assertEqual(
+            url,
+            "https://releases.butterfly.so/iso/pond-installer-0.1.4-x86_64.iso",
+        )
+        mock_urlopen.assert_called_once()
+
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.urllib.request.urlopen")
+    def test_content_disposition_missing_header(self, mock_urlopen: MagicMock, mock_ping: MagicMock):
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.headers = {}
+        mock_response.__enter__.return_value = mock_response
+        mock_urlopen.return_value = mock_response
+        settings = {
+            "strategy": "content_disposition",
+            "base_url": "https://example.com/",
+            "iso_regex": r"^test\.iso$",
+        }
+        name, url = process_scraping_strategy("Test", settings)
+        self.assertEqual(name, "")
+        self.assertEqual(url, "")
+
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.urllib.request.urlopen")
+    def test_content_disposition_malformed_header(self, mock_urlopen: MagicMock, mock_ping: MagicMock):
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.headers = {"Content-Disposition": "attachment"}
+        mock_response.__enter__.return_value = mock_response
+        mock_urlopen.return_value = mock_response
+        settings = {
+            "strategy": "content_disposition",
+            "base_url": "https://example.com/",
+            "iso_regex": r"^test\.iso$",
+        }
+        name, url = process_scraping_strategy("Test", settings)
+        self.assertEqual(name, "")
+        self.assertEqual(url, "")
+
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.urllib.request.urlopen")
+    def test_content_disposition_path_traversal_rejected(self, mock_urlopen: MagicMock, mock_ping: MagicMock):
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.headers = {
+            "Content-Disposition": 'attachment; filename="../../../etc/passwd"'
+        }
+        mock_response.__enter__.return_value = mock_response
+        mock_urlopen.return_value = mock_response
+        settings = {
+            "strategy": "content_disposition",
+            "base_url": "https://example.com/",
+            "iso_regex": r"^test\.iso$",
+        }
+        name, url = process_scraping_strategy("Test", settings)
+        self.assertEqual(name, "")
+        self.assertEqual(url, "")
+
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.urllib.request.urlopen")
+    def test_content_disposition_regex_mismatch(self, mock_urlopen: MagicMock, mock_ping: MagicMock):
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.headers = {
+            "Content-Disposition": 'attachment; filename="wrong-filename.iso"'
+        }
+        mock_response.__enter__.return_value = mock_response
+        mock_urlopen.return_value = mock_response
+        settings = {
+            "strategy": "content_disposition",
+            "base_url": "https://example.com/",
+            "iso_regex": r"^pond-installer-[0-9]+\.[0-9]+\.[0-9]+-x86_64\.iso$",
+        }
+        name, url = process_scraping_strategy("Test", settings)
+        self.assertEqual(name, "")
+        self.assertEqual(url, "")
+
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.urllib.request.urlopen")
+    def test_content_disposition_non_200_status(self, mock_urlopen: MagicMock, mock_ping: MagicMock):
+        mock_response = MagicMock()
+        mock_response.status = 404
+        mock_response.headers = {
+            "Content-Disposition": 'attachment; filename="test.iso"'
+        }
+        mock_response.__enter__.return_value = mock_response
+        mock_urlopen.return_value = mock_response
+        settings = {
+            "strategy": "content_disposition",
+            "base_url": "https://example.com/",
+            "iso_regex": r"^test\.iso$",
+        }
+        name, url = process_scraping_strategy("Test", settings)
+        self.assertEqual(name, "")
+        self.assertEqual(url, "")
+
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.urllib.request.urlopen")
+    def test_content_disposition_network_error(self, mock_urlopen: MagicMock, mock_ping: MagicMock):
+        mock_urlopen.side_effect = Exception("network error")
+        settings = {
+            "strategy": "content_disposition",
+            "base_url": "https://example.com/",
+            "iso_regex": r"^test\.iso$",
+        }
+        name, url = process_scraping_strategy("Test", settings)
+        self.assertEqual(name, "")
+        self.assertEqual(url, "")
+
+    @patch("visync.download.ping_mirror", return_value=True)
+    def test_content_disposition_missing_iso_regex(self, mock_ping: MagicMock):
+        settings = {
+            "strategy": "content_disposition",
+            "base_url": "https://example.com/",
+        }
+        name, url = process_scraping_strategy("Test", settings)
+        self.assertEqual(name, "")
+        self.assertEqual(url, "")
+
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.urllib.request.urlopen")
+    def test_content_disposition_rejects_http(self, mock_urlopen: MagicMock, mock_ping: MagicMock):
+        settings = {
+            "strategy": "content_disposition",
+            "base_url": "http://example.com/",
+            "iso_regex": r"^test\.iso$",
+        }
+        name, url = process_scraping_strategy("Test", settings)
+        self.assertEqual(name, "")
+        self.assertEqual(url, "")
+        mock_urlopen.assert_not_called()
+
+    @patch("visync.download.ping_mirror", return_value=True)
     def test_unknown_strategy(self, mock_ping: MagicMock):
         _section("Strategy: Unknown / Unrecognized")
         settings = {"strategy": "custom_strategy", "base_url": "https://example.com/"}

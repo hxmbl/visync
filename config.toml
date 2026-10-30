@@ -41,6 +41,7 @@ nixos-minimal = "NixOS Minimal"
 nixos-graphical = "NixOS Graphical"
 nixos = "NixOS Minimal"
 parrot = "Parrot Security"
+pond = "Pond"
 pop = "Pop!_OS"
 systemrescue = "SystemRescue"
 rescuezilla = "Rescuezilla"
@@ -259,3 +260,10 @@ api_url = "https://tails.net/install/v2/Tails/amd64/stable/latest.json"
 file_type = "img"
 checksum_format = "sha256sums"
 checksum_algo = "sha256"
+
+[distros.Pond]
+clean_name = "Pond"
+keyword = "pond"
+strategy = "content_disposition"
+base_url = "https://releases.butterfly.so/iso/"
+iso_regex = '^pond-installer-([0-9]+\.[0-9]+\.[0-9]+)-x86_64\.iso$'
