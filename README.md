@@ -4,7 +4,7 @@ Ventoy Package Manager. Install, update, and manage Linux distros on your Ventoy
 
 ## Install
 
-Requires Python 3.11+ and a mounted Ventoy drive.
+Requires Python 3.12+ and a mounted Ventoy drive.
 
 ```bash
 pip install visync
