@@ -20,7 +20,6 @@ debian = "Debian"
 
 [fork_overrides]
 # Key format: "parent_distro.keyword_in_filename" = "Clean Name"
-"arch.omarchy" = "Omarchy"
 "arch.manjaro" = "Manjaro"
 "ubuntu.pop-os" = "Pop!_OS"
 "ubuntu.pop_os" = "Pop!_OS"
@@ -41,6 +40,7 @@ nixos-minimal = "NixOS Minimal"
 nixos-graphical = "NixOS Graphical"
 nixos = "NixOS Minimal"
 parrot = "Parrot Security"
+pond = "Pond"
 pop = "Pop!_OS"
 systemrescue = "SystemRescue"
 rescuezilla = "Rescuezilla"
@@ -232,15 +232,6 @@ checksum_url = "{release_base_url}/nixos/{version}/nixos-{release}/{iso_name}.sh
 checksum_format = "sha256sums"
 checksum_algo = "sha256"
 
-# NOTE: Omarchy was removed. https://iso.omarchy.org/ returns HTTP 404 for
-# every path tried, including /index.html and /latest/. The per-version ISOs
-# still exist (e.g. /omarchy-4.0.1.iso serves a 6 GB file) but there is no
-# index page for direct_match to scrape, and no JSON manifest or release feed
-# was found to replace it. Guessing a version would mean trusting an
-# unverifiable pointer, so the scraper would fail closed instead.
-# Re-add here if Omarchy publishes a browsable index or a machine-readable
-# release feed.
-
 [distros.PopOS]
 clean_name = "Pop!_OS"
 keyword = "pop"
@@ -259,3 +250,10 @@ api_url = "https://tails.net/install/v2/Tails/amd64/stable/latest.json"
 file_type = "img"
 checksum_format = "sha256sums"
 checksum_algo = "sha256"
+
+[distros.Pond]
+clean_name = "Pond"
+keyword = "pond"
+strategy = "content_disposition"
+base_url = "https://releases.butterfly.so/iso/"
+iso_regex = '^pond-installer-([0-9]+\.[0-9]+\.[0-9]+)-x86_64\.iso$'

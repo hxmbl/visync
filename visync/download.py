@@ -420,6 +420,48 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
         except Exception as e:
             return fail(f"HEAD probe failed for {iso_url}: {e}")
 
+    if strategy == "content_disposition":
+        requirements = ["base_url", "iso_regex"]
+        if not base_url or not iso_regex:
+            warn(f"{name} — {strategy} requires {requirements}")
+            return fail(f"config incomplete: needs {requirements}")
+
+        # Get the filename without downloading the ISO.
+        try:
+            require_https(base_url, "mirror base URL")
+            req = urllib.request.Request(
+                base_url, method="HEAD", headers={"User-Agent": "Mozilla/5.0"}
+            )
+            with urllib.request.urlopen(req, timeout=MIRROR_HTTP_TIMEOUT) as resp:
+                if resp.status != 200:
+                    return fail(
+                        f"HEAD probe returned HTTP {resp.status} for {base_url}"
+                    )
+
+                content_disposition = resp.headers.get("Content-Disposition", "")
+                match = re.search(r'filename="?([^";]+)"?', content_disposition)
+
+                if not match:
+                    return fail("Content-Disposition has no filename")
+
+                raw_filename = match.group(1).strip()
+
+                if "/" in raw_filename or "\\" in raw_filename:
+                    return fail("Content-Disposition contains an unsafe filename")
+
+                filename = _safe_filename(raw_filename)
+
+                if not filename or not re.fullmatch(iso_regex, filename):
+                    return fail("Content-Disposition filename does not match iso_regex")
+
+            download_url = f"{base_url.rstrip('/')}/{filename}"
+            return filename, download_url
+
+        except ValueError as e:
+            return fail(str(e))
+        except Exception as e:
+            return fail(f"HEAD probe failed for {base_url}: {e}")
+
     # Strategy E: Pop!_OS JSON API — fetch latest build info
     elif strategy == "popos_api":
         import json as _json
