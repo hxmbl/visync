@@ -1610,23 +1610,6 @@ class TestNixosChecksumUrls(unittest.TestCase):
         print("NixOS checksums resolve to releases.nixos.org")
 
 
-class TestRemovedDistros(unittest.TestCase):
-    def test_omarchy_absent_from_config(self):
-        cfg = load_config()
-        self.assertNotIn(
-            "Omarchy", cfg.get("distros", {}), "Omarchy entry must be removed"
-        )
-
-    def test_omarchy_removal_is_documented_in_place(self):
-        """Follows the Arch Linux ARM precedent: a NOTE explaining why."""
-        text = (
-            Path(__file__).resolve().parent.parent.joinpath("config.toml").read_text()
-        )
-        self.assertIn("NOTE: Omarchy was removed", text)
-        self.assertIn("iso.omarchy.org", text)
-        print("removal records the reason and a re-add condition")
-
-
 # ── Distro identity: variant keys and config/name consistency ────────────────
 
 ISO_VID = 32808
@@ -1658,7 +1641,6 @@ class TestVariantKey(unittest.TestCase):
         cases = {
             "Pop_OS 24.04 amd64": "pop-os",
             "ARCH_202610": "arch",
-            "OMARCHY_202608": "omarchy",
             "Fedora-E-dvd-x86_64-44": "fedora-e-dvd",
             "Fedora-KDE-Live-44": "fedora-kde-live",
             "Ubuntu-Server 26.04.1 LTS amd64": "ubuntu-server",

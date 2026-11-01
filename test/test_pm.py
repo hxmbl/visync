@@ -444,20 +444,20 @@ class TestSyncFiltering(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             drive = _make_drive(Path(tmp))
             (drive / ".visync").mkdir(exist_ok=True)
-            (drive / ".visync" / "installed.json").write_text('{"Omarchy": {}}')
+            (drive / ".visync" / "installed.json").write_text('{"RemovedDistro": {}}')
 
             from visync.download import sync_all_configured_distros
 
             _dir, _dl, failures = sync_all_configured_distros(
                 dry_run=True,
-                only=["ArchLinux", "Omarchy"],
+                only=["ArchLinux", "RemovedDistro"],
                 drive_override=drive,
                 use_buffer=False,
             )
 
         reasons = dict(failures)
-        self.assertIn("Omarchy", reasons)
-        self.assertIn("no longer configured", reasons["Omarchy"])
+        self.assertIn("RemovedDistro", reasons)
+        self.assertIn("no longer configured", reasons["RemovedDistro"])
         self.assertNotIn("ArchLinux", reasons)
 
 
