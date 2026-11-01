@@ -432,11 +432,11 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
             req = urllib.request.Request(
                 base_url, method="HEAD", headers={"User-Agent": "Mozilla/5.0"}
             )
-            with urllib.request.urlopen(
-                req, timeout=MIRROR_HTTP_TIMEOUT
-            ) as resp:
+            with urllib.request.urlopen(req, timeout=MIRROR_HTTP_TIMEOUT) as resp:
                 if resp.status != 200:
-                    return fail(f"HEAD probe returned HTTP {resp.status} for {base_url}")
+                    return fail(
+                        f"HEAD probe returned HTTP {resp.status} for {base_url}"
+                    )
 
                 content_disposition = resp.headers.get("Content-Disposition", "")
                 match = re.search(r'filename="?([^";]+)"?', content_disposition)
@@ -461,7 +461,6 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
             return fail(str(e))
         except Exception as e:
             return fail(f"HEAD probe failed for {base_url}: {e}")
-
 
     # Strategy E: Pop!_OS JSON API — fetch latest build info
     elif strategy == "popos_api":

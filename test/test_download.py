@@ -461,7 +461,9 @@ class TestProcessScrapingStrategy(unittest.TestCase):
 
     @patch("visync.download.ping_mirror", return_value=True)
     @patch("visync.download.urllib.request.urlopen")
-    def test_content_disposition_strategy(self, mock_urlopen: MagicMock, mock_ping: MagicMock):
+    def test_content_disposition_strategy(
+        self, mock_urlopen: MagicMock, mock_ping: MagicMock
+    ):
         mock_response = MagicMock()
         mock_response.status = 200
         mock_response.headers = {
@@ -484,7 +486,9 @@ class TestProcessScrapingStrategy(unittest.TestCase):
 
     @patch("visync.download.ping_mirror", return_value=True)
     @patch("visync.download.urllib.request.urlopen")
-    def test_content_disposition_missing_header(self, mock_urlopen: MagicMock, mock_ping: MagicMock):
+    def test_content_disposition_missing_header(
+        self, mock_urlopen: MagicMock, mock_ping: MagicMock
+    ):
         mock_response = MagicMock()
         mock_response.status = 200
         mock_response.headers = {}
@@ -501,7 +505,9 @@ class TestProcessScrapingStrategy(unittest.TestCase):
 
     @patch("visync.download.ping_mirror", return_value=True)
     @patch("visync.download.urllib.request.urlopen")
-    def test_content_disposition_malformed_header(self, mock_urlopen: MagicMock, mock_ping: MagicMock):
+    def test_content_disposition_malformed_header(
+        self, mock_urlopen: MagicMock, mock_ping: MagicMock
+    ):
         mock_response = MagicMock()
         mock_response.status = 200
         mock_response.headers = {"Content-Disposition": "attachment"}
@@ -518,7 +524,9 @@ class TestProcessScrapingStrategy(unittest.TestCase):
 
     @patch("visync.download.ping_mirror", return_value=True)
     @patch("visync.download.urllib.request.urlopen")
-    def test_content_disposition_path_traversal_rejected(self, mock_urlopen: MagicMock, mock_ping: MagicMock):
+    def test_content_disposition_path_traversal_rejected(
+        self, mock_urlopen: MagicMock, mock_ping: MagicMock
+    ):
         mock_response = MagicMock()
         mock_response.status = 200
         mock_response.headers = {
@@ -537,7 +545,9 @@ class TestProcessScrapingStrategy(unittest.TestCase):
 
     @patch("visync.download.ping_mirror", return_value=True)
     @patch("visync.download.urllib.request.urlopen")
-    def test_content_disposition_regex_mismatch(self, mock_urlopen: MagicMock, mock_ping: MagicMock):
+    def test_content_disposition_regex_mismatch(
+        self, mock_urlopen: MagicMock, mock_ping: MagicMock
+    ):
         mock_response = MagicMock()
         mock_response.status = 200
         mock_response.headers = {
@@ -556,7 +566,9 @@ class TestProcessScrapingStrategy(unittest.TestCase):
 
     @patch("visync.download.ping_mirror", return_value=True)
     @patch("visync.download.urllib.request.urlopen")
-    def test_content_disposition_non_200_status(self, mock_urlopen: MagicMock, mock_ping: MagicMock):
+    def test_content_disposition_non_200_status(
+        self, mock_urlopen: MagicMock, mock_ping: MagicMock
+    ):
         mock_response = MagicMock()
         mock_response.status = 404
         mock_response.headers = {
@@ -575,7 +587,9 @@ class TestProcessScrapingStrategy(unittest.TestCase):
 
     @patch("visync.download.ping_mirror", return_value=True)
     @patch("visync.download.urllib.request.urlopen")
-    def test_content_disposition_network_error(self, mock_urlopen: MagicMock, mock_ping: MagicMock):
+    def test_content_disposition_network_error(
+        self, mock_urlopen: MagicMock, mock_ping: MagicMock
+    ):
         mock_urlopen.side_effect = Exception("network error")
         settings = {
             "strategy": "content_disposition",
@@ -598,7 +612,9 @@ class TestProcessScrapingStrategy(unittest.TestCase):
 
     @patch("visync.download.ping_mirror", return_value=True)
     @patch("visync.download.urllib.request.urlopen")
-    def test_content_disposition_rejects_http(self, mock_urlopen: MagicMock, mock_ping: MagicMock):
+    def test_content_disposition_rejects_http(
+        self, mock_urlopen: MagicMock, mock_ping: MagicMock
+    ):
         settings = {
             "strategy": "content_disposition",
             "base_url": "http://example.com/",
