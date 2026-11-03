@@ -1864,6 +1864,10 @@ class TestConfigNameConsistency(unittest.TestCase):
             "Ubuntu 26.04.1 LTS amd64",
             "ubuntu-26.04.1-desktop-amd64.iso",
         ),
+        "LinuxMint": (
+            "Linux Mint 22.1 Cinnamon 64-bit",
+            "linuxmint-22.1-cinnamon-64bit.iso",
+        ),
         "ParrotSecurity": ("Parrot", "Parrot-security-7.4_amd64.iso"),
         "NixOS": ("NIXOS_26.05_x86_64", "nixos-minimal-26.05.11045-x86_64-linux.iso"),
         "NixOSGraphical": (
