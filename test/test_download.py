@@ -410,6 +410,31 @@ class TestProcessScrapingStrategy(unittest.TestCase):
 
     @patch("visync.download.ping_mirror", return_value=True)
     @patch("visync.download.fetch_html")
+    def test_kali_picks_installer_amd64(
+        self, mock_fetch_html: MagicMock, mock_ping: MagicMock
+    ):
+        """Kali's flat current/ index mixes installer, live and VM images; only
+        the standard x86_64 installer ISO may be selected."""
+        _section("Strategy: direct_match — Kali installer amd64")
+        mock_fetch_html.return_value = (
+            '<a href="kali-linux-2026.3-hyperv-amd64.7z">vm</a>'
+            '<a href="kali-linux-2026.3-installer-amd64.iso">iso</a>'
+            '<a href="kali-linux-2026.3-installer-arm64.iso">arm</a>'
+            '<a href="kali-linux-2026.3-installer-netinst-amd64.iso">net</a>'
+            '<a href="kali-linux-2026.3-installer-purple-amd64.iso">purple</a>'
+            '<a href="kali-linux-2026.3-live-amd64.iso.torrent">live</a>'
+        )
+        settings = load_config()["distros"]["Kali"]
+        name, url = process_scraping_strategy("Kali Linux", settings)
+        self.assertEqual(name, "kali-linux-2026.3-installer-amd64.iso")
+        self.assertEqual(
+            url,
+            "https://cdimage.kali.org/current/kali-linux-2026.3-installer-amd64.iso",
+        )
+        _ok(f"Resolved to Kali installer: {name}")
+
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.fetch_html")
     def test_fedora_empty_root(self, mock_fetch_html: MagicMock, mock_ping: MagicMock):
         _section("Strategy: fedora_nested — Empty Root")
         mock_fetch_html.return_value = ""
