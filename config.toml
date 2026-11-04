@@ -299,3 +299,18 @@ keyword = "pond"
 strategy = "content_disposition"
 base_url = "https://releases.butterfly.so/iso/"
 iso_regex = '^pond-installer-([0-9]+\.[0-9]+\.[0-9]+)-x86_64\.iso$'
+
+[distros.Kali]
+clean_name = "Kali Linux"
+keyword = "kali"
+strategy = "direct_match"
+# cdimage.kali.org/current/ is a flat index of the current release: installer
+# and live ISOs sit together with SHA256SUMS. The installer filenames are
+# versioned (kali-linux-2026.3-installer-amd64.iso), so match on the version and
+# architecture to select the standard x86_64 installer without picking up the
+# netinst/purple/everything flavors or any live image (out of scope here).
+base_url = "https://cdimage.kali.org/current/"
+iso_regex = 'href="(kali-linux-[0-9]+\.[0-9]+-installer-amd64\.iso)"'
+checksum_url = "{base_url}SHA256SUMS"
+checksum_format = "sha256sums"
+checksum_algo = "sha256"

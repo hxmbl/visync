@@ -1610,6 +1610,38 @@ class TestNixosChecksumUrls(unittest.TestCase):
         print("NixOS checksums resolve to releases.nixos.org")
 
 
+class TestKaliProvider(unittest.TestCase):
+    """Kali uses the flat current/ index; select only the x86_64 installer."""
+
+    def _settings(self) -> dict:
+        return load_config()["distros"]["Kali"]
+
+    def test_regex_selects_installer_amd64_only(self):
+        regex = self._settings()["iso_regex"]
+        html = (
+            '<a href="kali-linux-2026.3-hyperv-amd64.7z">vm</a>'
+            '<a href="kali-linux-2026.3-installer-amd64.iso">iso</a>'
+            '<a href="kali-linux-2026.3-installer-arm64.iso">arm</a>'
+            '<a href="kali-linux-2026.3-installer-netinst-amd64.iso">net</a>'
+            '<a href="kali-linux-2026.3-installer-purple-amd64.iso">purple</a>'
+            '<a href="kali-linux-2026.3-live-amd64.iso.torrent">live</a>'
+        )
+        self.assertEqual(
+            re.findall(regex, html), ["kali-linux-2026.3-installer-amd64.iso"]
+        )
+
+    def test_checksum_url_expands_to_sums_file(self):
+        entry = self._settings()
+        url = expand_url(
+            entry["checksum_url"],
+            "kali-linux-2026.3-installer-amd64.iso",
+            entry["base_url"],
+        )
+        self.assertEqual(url, "https://cdimage.kali.org/current/SHA256SUMS")
+        self.assertEqual(entry["checksum_format"], "sha256sums")
+        self.assertEqual(entry["checksum_algo"], "sha256")
+
+
 # ── Distro identity: variant keys and config/name consistency ────────────────
 
 ISO_VID = 32808
@@ -1894,6 +1926,7 @@ class TestConfigNameConsistency(unittest.TestCase):
         "PopOS": ("Pop_OS 24.04 amd64", "pop-os_24.04_amd64_generic_24.iso"),
         "Pond": ("", "pond-installer-0.1.4-x86_64.iso"),
         "Tails": ("", "tails-amd64-7.14.img"),
+        "Kali": ("Kali Linux 2026.3", "kali-linux-2026.3-installer-amd64.iso"),
     }
 
     def test_every_clean_name_is_identifiable(self):
