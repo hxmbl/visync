@@ -108,6 +108,15 @@ _ARCH_TOKEN_RE = re.compile(
     r"x86[_-]?64|amd64|aarch64|arm64|armhfp|i[36]86|riscv64|x86", re.IGNORECASE
 )
 _VERSION_TOKEN_RE = re.compile(r"\d+(?:\.\d+)*")
+# elementary OS names its images "elementaryos-<release>-stable-<arch>.<build>.iso",
+# e.g. elementaryos-8.1-stable-amd64.20260219.iso. The release alone is not
+# enough to detect updates: upstream rebuilds the same release with a new build
+# date. Both parts are returned as one comparable version so a rebuild sorts
+# above the previous image.
+_ELEMENTARY_ISO_RE = re.compile(
+    r"^elementaryos-(\d+(?:\.\d+)*)-stable-[a-z0-9_]+\.(\d{8})\.iso$",
+    re.IGNORECASE,
+)
 
 
 def extract_version_from_filename(filename: str) -> str:
@@ -119,6 +128,12 @@ def extract_version_from_filename(filename: str) -> str:
     dotted numeric run for names like 'nixos-minimal-26.05.1947.a037-x86_64-linux.iso'.
     Returns the raw version substring or empty string if no numeric version found.
     """
+    elementary = _ELEMENTARY_ISO_RE.match(filename)
+    if elementary:
+        # Keep the build date in the version: 8.1.20260219 sorts above
+        # 8.1.20260101, so a rebuild of the same release is an update.
+        return f"{elementary.group(1)}.{elementary.group(2)}"
+
     stem = re.sub(r"\.(iso|img)$", "", filename, flags=re.IGNORECASE)
     stem = _ARCH_TOKEN_RE.sub("-", stem)
     for token in re.split(r"[\s_\-]+", stem):
@@ -390,11 +405,55 @@ def parse_tails_json(
         return digest or None
 
 
+def parse_elementary_checksum(
+    content: str, iso_name: str, algo: str = "sha256"
+) -> str | None:
+    """Parse elementary OS's installation guide for a filename-keyed SHA-256.
+
+    The guide is prose, not a sums file. It repeats the digest next to commands
+    such as ``sha256sum elementaryos-...iso`` and labels such as
+    ``SHA256 hash of Downloads\\elementaryos-...iso:``. A digest is accepted
+    only when it appears after the exact selected filename and before the next
+    ISO name, so the arm64 image's digest can never be attributed to the amd64
+    one. Repeated copies of the same digest are fine (the guide repeats each
+    platform's instructions). Two *different* digests for one filename are
+    ambiguous: returning None keeps the download UNVERIFIED instead of guessing.
+    """
+    if algo.strip().lower().replace("-", "") != "sha256":
+        return None
+    if not iso_name or not _ELEMENTARY_ISO_RE.fullmatch(iso_name):
+        return None
+    want = _hex_len_for(algo)
+    if want is None:
+        return None
+
+    digests: set[str] = set()
+    found_name = False
+    for match in re.finditer(re.escape(iso_name), content, re.IGNORECASE):
+        found_name = True
+        start = match.end()
+        next_iso = re.search(r"\.iso\b", content[start:], re.IGNORECASE)
+        end = start + next_iso.start() if next_iso else len(content)
+        # The cap guards against a page that omits the next filename entirely:
+        # without it a later image's digest could fall into this window.
+        window = content[start : min(end, start + 512)]
+        for digest_match in re.finditer(
+            r"(?<![0-9a-fA-F])([0-9a-fA-F]{64})(?![0-9a-fA-F])", window
+        ):
+            digests.add(digest_match.group(1).lower())
+
+    if not found_name or len(digests) != 1:
+        return None
+    digest = next(iter(digests))
+    return digest if len(digest) == want else None
+
+
 FORMAT_PARSERS = {
     "gpg_checksum": parse_gpg_checksum,
     "sha256sums": parse_hashsums,
     "sha1sums": parse_hashsums,
     "json": parse_tails_json,
+    "elementary_docs": parse_elementary_checksum,
 }
 
 
@@ -528,6 +587,11 @@ def extract_iso_metadata(iso_name: str) -> dict[str, str]:
         meta["version"] = channel
         meta["channel"] = channel
         meta["release"] = f"{channel}.{nixos.group(2)}.{nixos.group(3)}"
+        return meta
+
+    elementary = _ELEMENTARY_ISO_RE.match(iso_name)
+    if elementary:
+        meta["version"] = f"{elementary.group(1)}.{elementary.group(2)}"
         return meta
 
     generic = re.search(r"(\d+\.\d+(?:\.\d+)?)", iso_name)

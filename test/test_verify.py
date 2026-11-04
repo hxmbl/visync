@@ -14,6 +14,9 @@ from visync.verify import (
     ChecksumUnavailable,
     compute_iso_hash,
     expand_url,
+    extract_iso_metadata,
+    extract_version_from_filename,
+    parse_elementary_checksum,
     parse_gpg_checksum,
     parse_hashsums,
     parse_tails_json,
@@ -305,6 +308,110 @@ class TestParseTailsJson(unittest.TestCase):
         """A short digest must not be compared against a sha256 local hash."""
         data = {"sha256": "abcd1234"}
         self.assertIsNone(parse_tails_json(json.dumps(data)))
+
+
+class TestParseElementaryChecksum(unittest.TestCase):
+    """The installation guide is prose; only a digest tied to the exact ISO
+    filename may be used, and an ambiguous match must stay unverified."""
+
+    AMD64 = "bda93040d08c05911fb159f8150bf8f4ef2db6567ef6e2acd197cb6f395d3446"
+    ARM64 = "85116d48c406ae7cd60c936050a099d4b8610321273f6f0a694796db4d4e86ba"
+
+    PAGE = (
+        "<pre><code>CertUtil -hashfile Downloads\\"
+        "elementaryos-8.1-stable-amd64.20260219.iso sha256</code></pre>"
+        "<p>It should produce the output:</p>"
+        "<pre><code>SHA256 hash of Downloads\\"
+        "elementaryos-8.1-stable-amd64.20260219.iso:\n"
+        f"{AMD64}</code></pre>"
+        "<p>If you are using the image for ARM systems:</p>"
+        "<pre><code>CertUtil -hashfile Downloads\\"
+        "elementaryos-8.1-stable-arm64.20260219.iso sha256\n"
+        "SHA256 hash of Downloads\\"
+        "elementaryos-8.1-stable-arm64.20260219.iso:\n"
+        f"{ARM64}</code></pre>"
+        "<pre><code>sha256sum elementaryos-8.1-stable-amd64.20260219.iso</code></pre>"
+        "<p>It should produce the output:</p>"
+        f"<pre><code>{AMD64}</code></pre>"
+    )
+
+    def test_selects_digest_for_exact_amd64_filename(self) -> None:
+        _section("parse_elementary_checksum: amd64")
+        result = parse_elementary_checksum(
+            self.PAGE, "elementaryos-8.1-stable-amd64.20260219.iso"
+        )
+        self.assertEqual(result, self.AMD64)
+        _ok("amd64 digest selected, arm64 digest ignored")
+
+    def test_selects_digest_for_exact_arm64_filename(self) -> None:
+        result = parse_elementary_checksum(
+            self.PAGE, "elementaryos-8.1-stable-arm64.20260219.iso"
+        )
+        self.assertEqual(result, self.ARM64)
+        _ok("arm64 digest selected independently")
+
+    def test_missing_filename_returns_none(self) -> None:
+        self.assertIsNone(
+            parse_elementary_checksum(
+                self.PAGE, "elementaryos-8.2-stable-amd64.20260301.iso"
+            )
+        )
+        _ok("Absent filename yields None (unavailable, keep the file)")
+
+    def test_ambiguous_digests_return_none(self) -> None:
+        page = (
+            f"elementaryos-8.1-stable-amd64.20260219.iso\n{self.AMD64}\n{self.ARM64}\n"
+        )
+        self.assertIsNone(
+            parse_elementary_checksum(
+                page, "elementaryos-8.1-stable-amd64.20260219.iso"
+            )
+        )
+        _ok("Two different digests for one filename are refused")
+
+    def test_wrong_algorithm_returns_none(self) -> None:
+        self.assertIsNone(
+            parse_elementary_checksum(
+                self.PAGE,
+                "elementaryos-8.1-stable-amd64.20260219.iso",
+                "sha512",
+            )
+        )
+        _ok("Only the published SHA-256 algorithm is accepted")
+
+    def test_non_elementary_filename_returns_none(self) -> None:
+        self.assertIsNone(parse_elementary_checksum(self.PAGE, "other.iso"))
+
+
+class TestElementaryVersion(unittest.TestCase):
+    def test_release_and_build_are_combined(self) -> None:
+        _section("elementary OS version: release + build date")
+        self.assertEqual(
+            extract_version_from_filename("elementaryos-8.1-stable-amd64.20260219.iso"),
+            "8.1.20260219",
+        )
+        _ok("8.1.20260219 compares above an older build of 8.1")
+
+    def test_newer_release_sorts_above_newer_build(self) -> None:
+        from visync.verify import compare_versions
+
+        self.assertGreater(
+            compare_versions("8.2.20260301", "8.1.20260219"),
+            0,
+        )
+        self.assertGreater(
+            compare_versions("8.1.20260219", "8.1.20260101"),
+            0,
+        )
+        self.assertEqual(
+            compare_versions("8.1.20260219", "8.1.20260219"),
+            0,
+        )
+        _ok("Release and build are both part of the comparison")
+
+    def test_metadata_carries_combined_version(self) -> None:
+        meta = extract_iso_metadata("elementaryos-8.1-stable-amd64.20260219.iso")
+        self.assertEqual(meta["version"], "8.1.20260219")
 
 
 class TestExpandUrl(unittest.TestCase):

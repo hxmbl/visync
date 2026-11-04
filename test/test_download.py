@@ -15,7 +15,9 @@ from visync.download import (
     SyncStatus,
     _check_distro,
     _cleanup_old_versions,
+    _extract_elementary_amd64_url,
     _filename_variant_key,
+    _is_elementary_amd64_url,
     _variant_stem,
     download_iso,
     fetch_html,
@@ -688,6 +690,172 @@ class TestProcessScrapingStrategy(unittest.TestCase):
         self.assertEqual(name, "")
         self.assertEqual(url, "")
         _ok("Empty strings returned for unknown strategy")
+
+
+class TestElementaryProvider(unittest.TestCase):
+    """elementary OS links carry a temporary token and the checksum lives in
+    prose on the installation guide, so both need provider-specific handling."""
+
+    TOKEN = "MTc5MzgzMzczNA=="  # noqa: S105 - URL path segment, not a credential
+    AMD64 = "elementaryos-8.1-stable-amd64.20260219.iso"
+    ARM64 = "elementaryos-8.1-stable-arm64.20260219.iso"
+    AMD64_URL = f"https://dl.elementaryos.org/{TOKEN}/{AMD64}"
+    ARM64_URL = f"https://dl.elementaryos.org/{TOKEN}/{ARM64}"
+    AMD64_HASH = "bda93040d08c05911fb159f8150bf8f4ef2db6567ef6e2acd197cb6f395d3446"
+    ARM64_HASH = "85116d48c406ae7cd60c936050a099d4b8610321273f6f0a694796db4d4e86ba"
+
+    HOME_HTML = (
+        f'<a class="button download-link http arm" href="{ARM64_URL}">'
+        "ARM</a>"
+        '<a class="button download-link magnet x86" '
+        'href="magnet:?xt=urn:btih:0314&dn=elementaryos-8.1-stable-amd64.20260219.iso">'
+        "magnet</a>"
+        f'<a autofocus class="button download-link http x86" href="{AMD64_URL}">'
+        "Download</a>"
+    )
+
+    CHECKSUM_HTML = (
+        f"<pre>SHA256 hash of Downloads\\{AMD64}:\n{AMD64_HASH}</pre>"
+        f"<pre>SHA256 hash of Downloads\\{ARM64}:\n{ARM64_HASH}</pre>"
+    )
+
+    def _settings(self) -> dict:
+        return dict(load_config()["distros"]["ElementaryOS"])
+
+    def test_extracts_exact_amd64_href_with_token(self) -> None:
+        _section("elementary: extract stable amd64 href")
+        url = _extract_elementary_amd64_url(self.HOME_HTML)
+        self.assertEqual(url, self.AMD64_URL)
+        _ok("arm64 and magnet links skipped, token preserved verbatim")
+
+    def test_accepts_only_exact_download_hostname(self) -> None:
+        _section("elementary: download URL validation")
+        self.assertTrue(_is_elementary_amd64_url(self.AMD64_URL))
+        bad_urls = [
+            self.AMD64_URL.replace("dl.elementaryos.org", "evil.example.com"),
+            self.AMD64_URL.replace(
+                "dl.elementaryos.org", "dl.elementaryos.org.evil.example.com"
+            ),
+            self.AMD64_URL.replace("https://", "http://"),
+            self.AMD64_URL.replace("dl.elementaryos.org", "user@dl.elementaryos.org"),
+            self.AMD64_URL.replace("dl.elementaryos.org", "dl.elementaryos.org:8443"),
+            self.AMD64_URL.replace("-amd64.", "-arm64."),
+        ]
+        for url in bad_urls:
+            with self.subTest(url=url):
+                self.assertFalse(_is_elementary_amd64_url(url))
+        _ok("lookalike hosts, cleartext, credentials, ports and arch are refused")
+
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.fetch_html")
+    def test_strategy_resolves_link_and_checksum(
+        self, mock_fetch: MagicMock, _mock_ping: MagicMock
+    ) -> None:
+        _section("elementary: strategy resolves link and checksum")
+        mock_fetch.side_effect = [self.HOME_HTML, self.CHECKSUM_HTML]
+        settings = self._settings()
+        with patch(
+            "visync.download._probe_elementary_download", return_value=(True, "")
+        ):
+            filename, url = process_scraping_strategy("elementary OS", settings)
+
+        self.assertEqual(filename, self.AMD64)
+        self.assertEqual(url, self.AMD64_URL)
+        self.assertEqual(settings["resolved_checksum"], self.AMD64_HASH)
+        _ok("fresh link returned and amd64 digest stashed")
+
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.fetch_html")
+    def test_strategy_refreshes_expired_link_once(
+        self, mock_fetch: MagicMock, _mock_ping: MagicMock
+    ) -> None:
+        _section("elementary: expired link refresh")
+        fresh_url = self.AMD64_URL.replace(self.TOKEN, "RlJFU0g==")
+        fresh_html = self.HOME_HTML.replace(self.AMD64_URL, fresh_url)
+        mock_fetch.side_effect = [self.HOME_HTML, fresh_html]
+        settings = self._settings()
+        with (
+            patch(
+                "visync.download._probe_elementary_download",
+                side_effect=[(False, "HEAD probe returned HTTP 403"), (True, "")],
+            ),
+            patch("visync.download._elementary_checksum_for", return_value=""),
+        ):
+            filename, url = process_scraping_strategy("elementary OS", settings)
+
+        self.assertEqual(filename, self.AMD64)
+        self.assertEqual(url, fresh_url)
+        self.assertEqual(mock_fetch.call_count, 2)
+        _ok("homepage fetched twice and the fresh token used")
+
+    @patch("visync.download.ping_mirror", return_value=True)
+    def test_strategy_gives_up_after_one_refresh(self, _mock_ping: MagicMock) -> None:
+        _section("elementary: retry is bounded to one refresh")
+        settings = self._settings()
+        with (
+            patch("visync.download.fetch_html", return_value=self.HOME_HTML),
+            patch(
+                "visync.download._probe_elementary_download",
+                return_value=(False, "HEAD probe returned HTTP 403"),
+            ),
+        ):
+            filename, url = process_scraping_strategy("elementary OS", settings)
+        self.assertEqual(filename, "")
+        self.assertEqual(url, "")
+        self.assertIn("403", settings["resolve_error"])
+        _ok("two failed probes stop instead of looping")
+
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.fetch_html")
+    def test_missing_checksum_still_allows_download(
+        self, mock_fetch: MagicMock, _mock_ping: MagicMock
+    ) -> None:
+        _section("elementary: unavailable checksum keeps download")
+        mock_fetch.side_effect = [self.HOME_HTML, "<html>no hashes here</html>"]
+        settings = self._settings()
+        # Simulate a digest stashed by an earlier resolution; it must not be
+        # reused for this image when the guide no longer provides one.
+        settings["resolved_checksum"] = "0" * 64
+        with patch(
+            "visync.download._probe_elementary_download", return_value=(True, "")
+        ):
+            filename, url = process_scraping_strategy("elementary OS", settings)
+
+        self.assertEqual(filename, self.AMD64)
+        self.assertEqual(url, self.AMD64_URL)
+        self.assertNotIn("resolved_checksum", settings)
+        _ok("download proceeds and is left for the UNVERIFIED policy")
+
+    @patch("visync.download.find_installed_isos")
+    @patch("visync.download.process_scraping_strategy")
+    def test_build_date_is_an_update(
+        self, mock_scrape: MagicMock, mock_find: MagicMock
+    ) -> None:
+        _section("elementary: build date is an update")
+        mock_scrape.return_value = (self.AMD64, self.AMD64_URL)
+        mock_find.return_value = [
+            Path("/tmp/elementaryos-8.1-stable-amd64.20260101.iso")
+        ]
+        settings = {"clean_name": "elementary OS"}
+
+        result = _check_distro("ElementaryOS", settings, Path("/tmp"), force=False)
+        self.assertIs(result.status, SyncStatus.STALE)
+        self.assertEqual(result.download_url, self.AMD64_URL)
+        _ok("same release, newer build is STALE")
+
+    @patch("visync.download.find_installed_isos")
+    @patch("visync.download.process_scraping_strategy")
+    def test_same_build_is_current(
+        self, mock_scrape: MagicMock, mock_find: MagicMock
+    ) -> None:
+        _section("elementary: same release+build is current")
+        mock_scrape.return_value = (self.AMD64, self.AMD64_URL)
+        mock_find.return_value = [Path(f"/tmp/{self.AMD64}")]
+        settings = {"clean_name": "elementary OS"}
+
+        result = _check_distro("ElementaryOS", settings, Path("/tmp"), force=False)
+        self.assertIs(result.status, SyncStatus.CURRENT)
+        _ok("exact release+build match is CURRENT")
 
 
 class _FakeResponse:

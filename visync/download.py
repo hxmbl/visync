@@ -12,9 +12,10 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from enum import StrEnum
+from html import unescape as _html_unescape
 from pathlib import Path
 from typing import NamedTuple
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from rich.markup import escape as _esc
 
@@ -43,7 +44,12 @@ from visync.output import (
     success,
     warn,
 )
-from visync.verify import compare_versions, extract_version_from_filename, parse_version
+from visync.verify import (
+    compare_versions,
+    extract_version_from_filename,
+    parse_elementary_checksum,
+    parse_version,
+)
 
 DEBUG = os.environ.get("VISYNC_DEBUG", "0") == "1"
 
@@ -222,6 +228,155 @@ def _nixos_stable_channel(settings: dict) -> tuple[str, str]:
         return pinned, ""
 
     return max(channels, key=_key), ""
+
+
+ELEMENTARY_HOME = "https://elementary.io/"
+ELEMENTARY_DOWNLOAD_HOST = "dl.elementaryos.org"
+# The selected image is the stable amd64 build: elementaryos-<release>-stable-amd64.<build>.iso.
+# The homepage also links an arm64 image and a magnet URI that carries the same
+# temporary token, so the architecture and filename are part of the match.
+_ELEMENTARY_AMD64_ISO_RE = re.compile(
+    r"^elementaryos-\d+(?:\.\d+)*-stable-amd64\.\d{8}\.iso$", re.IGNORECASE
+)
+
+
+def _html_attr(tag: str, name: str) -> str:
+    """Read one HTML attribute, accepting either quote style."""
+    match = re.search(
+        rf"""\b{re.escape(name)}\s*=\s*(["'])(.*?)\1""",
+        tag,
+        re.IGNORECASE | re.DOTALL,
+    )
+    return match.group(2) if match else ""
+
+
+def _is_elementary_amd64_url(url: str) -> bool:
+    """True only for an HTTPS stable-amd64 ISO on dl.elementaryos.org.
+
+    The hostname is compared exactly, not by suffix: a lookalike such as
+    ``dl.elementaryos.org.example.com`` must be refused. Credentials and
+    non-standard ports are refused too, and the filename must match the
+    upstream elementary OS naming scheme.
+    """
+    try:
+        parsed = urlparse(url)
+        port = parsed.port
+    except ValueError:
+        return False
+    if parsed.scheme.lower() != "https":
+        return False
+    if (parsed.hostname or "").lower() != ELEMENTARY_DOWNLOAD_HOST:
+        return False
+    if parsed.username is not None or parsed.password is not None:
+        return False
+    if port not in (None, 443):
+        return False
+    filename = _safe_filename(unquote(parsed.path))
+    return bool(_ELEMENTARY_AMD64_ISO_RE.fullmatch(filename))
+
+
+def _extract_elementary_amd64_url(page: str) -> str:
+    """Find the stable amd64 download href in elementary's homepage HTML.
+
+    The download button is an ``<a>`` with ``download-link`` and ``x86``
+    classes, but the magnet button carries those classes too. Only an href that
+    itself validates as an HTTPS amd64 ISO URL is accepted, so the magnet link
+    and the arm64 button are skipped. The href is returned verbatim: its
+    base64-looking token is part of the temporary download URL and must never
+    be reconstructed or cached.
+    """
+    hrefs: list[str] = []
+    for tag in re.findall(r"<a\b[^>]*>", page, flags=re.IGNORECASE):
+        classes = set(_html_attr(tag, "class").split())
+        href = _html_unescape(_html_attr(tag, "href").strip())
+        if href and {"download-link", "x86"}.issubset(classes):
+            hrefs.append(href)
+
+    # Fallback for a markup change that drops the button classes: consider
+    # every href and let the URL validator pick the stable amd64 image.
+    for _quote, href in re.findall(
+        r"""\bhref\s*=\s*(["'])(.*?)\1""", page, re.IGNORECASE
+    ):
+        hrefs.append(_html_unescape(href.strip()))
+
+    for href in hrefs:
+        if _is_elementary_amd64_url(href):
+            return href
+    return ""
+
+
+def _probe_elementary_download(url: str) -> tuple[bool, str]:
+    """HEAD-probe a resolved elementary link so an expired token is caught early.
+
+    urllib follows the 307 to the storage backend, so a valid token ends at a
+    2xx response. A failure is reported rather than raised; the caller refreshes
+    the homepage once and tries the newly resolved link.
+    """
+    try:
+        require_https(url, "ISO download")
+        request = urllib.request.Request(
+            url, method="HEAD", headers={"User-Agent": "Mozilla/5.0"}
+        )
+        with urllib.request.urlopen(  # require_https above is the allowlist
+            request, timeout=MIRROR_HTTP_TIMEOUT
+        ) as response:
+            status = getattr(response, "status", 200)
+            if 200 <= status < 400:
+                return True, ""
+            return False, f"HEAD probe returned HTTP {status}"
+    except urllib.error.HTTPError as e:
+        return False, f"HEAD probe returned HTTP {e.code}"
+    except Exception as e:
+        return False, f"HEAD probe failed: {e}"
+
+
+def _resolve_elementary_download(settings: dict) -> tuple[str, str, str]:
+    """Resolve a fresh stable amd64 URL, refreshing once if it has expired.
+
+    Returns ``(filename, url, reason)``; *reason* is non-empty on failure. The
+    homepage is fetched on every call, so no token is ever cached, generated, or
+    hardcoded. If the extracted link fails its HEAD probe (an expired token, a
+    stale page, or a transient probe failure), the homepage is fetched once more
+    and the fresh link is tried. The URL is returned exactly as published.
+    """
+    base_url = str(settings.get("base_url") or ELEMENTARY_HOME)
+    reason = ""
+    for _attempt in range(2):
+        page = fetch_html(base_url)
+        if not page:
+            reason = f"could not fetch {base_url}"
+            continue
+        url = _extract_elementary_amd64_url(page)
+        if not url:
+            reason = f"no stable amd64 download link found on {base_url}"
+            continue
+        if not _is_elementary_amd64_url(url):
+            reason = f"refusing untrusted elementary download URL {url!r}"
+            continue
+        ok, probe_reason = _probe_elementary_download(url)
+        if ok:
+            filename = _safe_filename(unquote(urlparse(url).path))
+            return filename, url, ""
+        reason = probe_reason
+        _debug(f"elementary download link rejected, refreshing: {probe_reason}")
+    return "", "", reason or "could not resolve an elementary download link"
+
+
+def _elementary_checksum_for(settings: dict, filename: str) -> str:
+    """Return the SHA-256 the installation guide publishes for *filename*.
+
+    An empty string means the guide could not be read or the digest was absent
+    or ambiguous. Callers keep the download and let the normal unverified-file
+    policy handle it; HTTPS alone is never treated as integrity verification.
+    """
+    checksum_url = str(settings.get("checksum_url") or "")
+    if not checksum_url:
+        return ""
+    page = fetch_html(checksum_url)
+    if not page:
+        _debug(f"elementary checksum page unavailable: {checksum_url}")
+        return ""
+    return parse_elementary_checksum(page, filename, "sha256") or ""
 
 
 def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
@@ -419,6 +574,24 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
             return fail(str(e))
         except Exception as e:
             return fail(f"HEAD probe failed for {iso_url}: {e}")
+
+    # Strategy: elementary OS homepage link + installation-guide checksum
+    if strategy == "elementary_page":
+        if not base_url:
+            warn(f"{name} — elementary_page requires base_url")
+            return fail("config incomplete: needs base_url")
+        filename, url, reason = _resolve_elementary_download(settings)
+        if not filename:
+            warn(f"{name} — {reason}")
+            return fail(reason)
+        # A previous resolution in this process may have stashed a digest. Drop
+        # it before reading the guide so an unavailable checksum cannot silently
+        # reuse an older image's digest.
+        settings.pop("resolved_checksum", None)
+        checksum = _elementary_checksum_for(settings, filename)
+        if checksum:
+            settings["resolved_checksum"] = checksum
+        return filename, url
 
     if strategy == "content_disposition":
         requirements = ["base_url", "iso_regex"]
@@ -1079,8 +1252,11 @@ _ARCH_IN_KEY_RE = re.compile(
     re.IGNORECASE,
 )
 # Version tokens: pure numbers, optionally dotted, tolerating a trailing
-# separator left behind by a stripped arch token ("live-1.7.").
-_VERSION_IN_KEY_RE = re.compile(r"^\d+(?:\.\d+)*\.?$")
+# separator left behind by a stripped arch token ("live-1.7."). The leading dot
+# matters for elementary OS, whose build date is glued to the arch as
+# "…-amd64.20260219"; without it the build date became part of the variant key
+# and two builds of the same release never grouped for cleanup.
+_VERSION_IN_KEY_RE = re.compile(r"^\.?\d+(?:\.\d+)*\.?$")
 # Release-type words that appear in volume IDs but never distinguish a variant.
 _RELEASE_WORD_RE = re.compile(
     r"^(?:lts|esd|point|pre|rc|beta|alpha|rc\d*)$", re.IGNORECASE

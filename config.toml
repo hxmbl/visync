@@ -35,6 +35,10 @@ cos = "CachyOS Desktop"
 [standalone_matches]
 # Text matching targets for standalone distros, flavors, and tools
 cachyos = "CachyOS Desktop"
+# elementary OS writes "elementary OS" to the volume ID but prefixes its
+# filenames with "elementaryos-", so both spellings must identify one distro.
+elementary = "elementary OS"
+elementaryos = "elementary OS"
 gparted = "GParted Live"
 hbcd = "Hiren's BootCD"
 hiren = "Hiren's BootCD"
@@ -313,4 +317,19 @@ base_url = "https://cdimage.kali.org/current/"
 iso_regex = 'href="(kali-linux-[0-9]+\.[0-9]+-installer-amd64\.iso)"'
 checksum_url = "{base_url}SHA256SUMS"
 checksum_format = "sha256sums"
+checksum_algo = "sha256"
+
+[distros.ElementaryOS]
+clean_name = "elementary OS"
+keyword = "elementary"
+strategy = "elementary_page"
+# The homepage embeds a temporary, base64-looking token in the stable amd64
+# download link. The scraper reads that link fresh on every run — it must never
+# be hardcoded, generated, or cached. Only dl.elementaryos.org is accepted.
+base_url = "https://elementary.io/"
+# The installation guide publishes the SHA-256 next to the exact ISO filename.
+# A missing or ambiguous digest leaves the download UNVERIFIED; HTTPS alone is
+# never treated as integrity verification.
+checksum_url = "https://elementary.io/docs/installation"
+checksum_format = "elementary_docs"
 checksum_algo = "sha256"

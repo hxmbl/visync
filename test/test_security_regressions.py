@@ -676,7 +676,7 @@ class TestStrategyDispatchTerminates(unittest.TestCase):
                 offenders.append(test)
         self.assertEqual(offenders, [], f"branches that fall through: {offenders}")
 
-    def test_all_six_strategies_are_present(self):
+    def test_all_strategies_are_present(self):
         tests = [ast.unparse(n.test) for n in self._dispatch_chain()]
         for strategy in (
             "direct_match",
@@ -685,6 +685,7 @@ class TestStrategyDispatchTerminates(unittest.TestCase):
             "nixos_channel",
             "popos_api",
             "tails_api",
+            "elementary_page",
         ):
             with self.subTest(strategy=strategy):
                 self.assertTrue(
@@ -1681,6 +1682,10 @@ class TestVariantKey(unittest.TestCase):
             "archlinux-2026.10.01-x86_64.iso": "archlinux",
             "tails-amd64-7.14.img": "tails",
             "ipxe.iso": "ipxe",
+            # The build date is glued to the arch token; without stripping the
+            # leading dot it stayed in the key and two builds never grouped.
+            "elementaryos-8.1-stable-amd64.20260219.iso": "elementaryos-stable",
+            "elementary OS 8.1 amd64": "elementary-os",
         }
         for raw, expected in cases.items():
             with self.subTest(text=raw):
@@ -1735,6 +1740,18 @@ class TestVariantKey(unittest.TestCase):
 
         self.assertFalse(same_variant_prefix("fedora-kde-live", "archlinux"))
 
+    def test_elementary_volume_id_matches_filename_key(self):
+        """The volume ID spells 'elementary OS' while filenames use
+        'elementaryos', so cleanup must still pair them."""
+        from visync.download import same_variant_prefix, variant_key
+
+        self.assertTrue(
+            same_variant_prefix(
+                variant_key("elementary OS 8.1 amd64"),
+                variant_key("elementaryos-8.1-stable-amd64.20260219.iso"),
+            )
+        )
+
     def test_empty_keys_are_permissive(self):
         from visync.download import same_variant_prefix
 
@@ -1778,6 +1795,27 @@ class TestCleanupDeletionSafety(unittest.TestCase):
             _cleanup_old_versions(new, drive)
 
             self.assertFalse(old.exists(), "older CachyOS build must be removed")
+            self.assertTrue(new.exists(), "newest build must survive")
+
+    def test_cleanup_removes_older_elementary_build(self):
+        """A rebuild of the same release has a new build date, not a new
+        release, so the older build must still be recognised as stale."""
+        from visync.download import _cleanup_old_versions
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            drive = self._drive(tmpdir)
+            old = _make_iso(
+                drive / "elementaryos-8.1-stable-amd64.20260101.iso",
+                "elementary OS 8.1 amd64",
+            )
+            new = _make_iso(
+                drive / "elementaryos-8.1-stable-amd64.20260219.iso",
+                "elementary OS 8.1 amd64",
+            )
+
+            _cleanup_old_versions(new, drive)
+
+            self.assertFalse(old.exists(), "older elementary OS build must be removed")
             self.assertTrue(new.exists(), "newest build must survive")
 
     def test_cleanup_keeps_different_variants(self):
@@ -1927,6 +1965,10 @@ class TestConfigNameConsistency(unittest.TestCase):
         "Pond": ("", "pond-installer-0.1.4-x86_64.iso"),
         "Tails": ("", "tails-amd64-7.14.img"),
         "Kali": ("Kali Linux 2026.3", "kali-linux-2026.3-installer-amd64.iso"),
+        "ElementaryOS": (
+            "elementary OS 8.1 amd64",
+            "elementaryos-8.1-stable-amd64.20260219.iso",
+        ),
     }
 
     def test_every_clean_name_is_identifiable(self):

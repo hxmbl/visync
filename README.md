@@ -113,8 +113,11 @@ Config resolution order: explicit `--config` path, then `$VISYNC_CONFIG`, then `
 | `nixos_channel` | Stable-channel lookup + channel page parse | NixOS Minimal, NixOS Graphical |
 | `popos_api` | JSON API | Pop!_OS |
 | `tails_api` | JSON API | Tails |
+| `elementary_page` | Fresh homepage link + installation-guide checksum | elementary OS |
 
-**Checksum formats:** `gpg_checksum` (Fedora — inline `SHA256 (file) = hash`), `sha256sums` (Ubuntu, Arch, CachyOS, Linux Mint, Parrot, Kali, NixOS, Tails), `json` (Tails)
+**Checksum formats:** `gpg_checksum` (Fedora — inline `SHA256 (file) = hash`), `sha256sums` (Ubuntu, Arch, CachyOS, Linux Mint, Parrot, Kali, NixOS, Tails), `json` (Tails), `elementary_docs` (elementary OS — a SHA-256 tied to the exact ISO filename on the installation guide)
+
+elementary OS publishes a temporary, tokenised download link on its homepage. visync reads that link fresh on every run and never hardcodes, generates, or caches the token; only `dl.elementaryos.org` is accepted, and an expired link is refreshed once before failing. The SHA-256 is read from the installation guide only when it is explicitly associated with the selected filename. A missing or ambiguous digest keeps the file and reports it as `UNVERIFIED`.
 
 Signature checking is configured separately via `signing_key_url` + `signing_key_fingerprint` and works with any signed layout, so Parrot's sectioned hash list gets both a signature check and a digest check.
 
