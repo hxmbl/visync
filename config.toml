@@ -17,6 +17,8 @@ arch = "Arch Linux"
 fedora = "Fedora"
 ubuntu = "Ubuntu"
 debian = "Debian"
+# CachyOS ISOs carry the abbreviated volume ID "COS_260809".
+cos = "CachyOS Desktop"
 
 [fork_overrides]
 # Key format: "parent_distro.keyword_in_filename" = "Clean Name"
@@ -32,6 +34,7 @@ debian = "Debian"
 
 [standalone_matches]
 # Text matching targets for standalone distros, flavors, and tools
+cachyos = "CachyOS Desktop"
 gparted = "GParted Live"
 hbcd = "Hiren's BootCD"
 hiren = "Hiren's BootCD"
@@ -197,6 +200,21 @@ signing_key_url = "https://deb.parrot.sh/parrot/misc/archive.gpg"
 signing_key_fingerprint = [
     "B711822346552E4D92DA02DF7A8286AF0E81EE4A",
 ]
+
+[distros.CachyOS]
+clean_name = "CachyOS Desktop"
+keyword = "cachyos"
+strategy = "ubuntu_nested"
+base_url = "https://mirror.cachyos.org/ISO/desktop/"
+# Release directories are date-numbered YYMMDD (260426/, 260628/, 260809/).
+version_regex = 'href="([0-9]{6})/"'
+# The release directory holds one desktop ISO alongside .sha1, .sha256,
+# .sig and .pkgs.txt sidecars. The trailing quote keeps the sidecars out.
+iso_regex = 'href="(cachyos-desktop-linux-[0-9]{6}\.iso)"'
+# The .iso.sha256 sidecar is a standard "<digest>  <filename>" line.
+checksum_url = "{base_url}{version}/{iso_name}.sha256"
+checksum_format = "sha256sums"
+checksum_algo = "sha256"
 
 [distros.NixOS]
 clean_name = "NixOS Minimal"

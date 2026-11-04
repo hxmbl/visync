@@ -173,6 +173,7 @@ class TestVariantStem(unittest.TestCase):
             ("Fedora-KDE-Live-44", "Fedora-KDE-Desktop-Live-44-1.7.x86_64.iso"),
             ("Pop_OS 24.04 amd64", "pop-os_24.04_amd64_generic_24.iso"),
             ("ARCH_202610", "archlinux-2026.10.01-x86_64.iso"),
+            ("COS_260809", "cachyos-desktop-linux-260809.iso"),
             ("Ubuntu-Server 26.04.1 LTS amd64", "ubuntu-26.04.1-live-server-amd64.iso"),
         ]
         for vid, filename in pairs:
@@ -377,6 +378,35 @@ class TestProcessScrapingStrategy(unittest.TestCase):
         self.assertEqual(name, "ubuntu-24.10-live-server-amd64.iso")
         self.assertIn("24.10/", url)
         _ok(f"Resolved to Ubuntu 24.10: {name}")
+
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.fetch_html")
+    def test_cachyos_nested_picks_newest_date_release(
+        self, mock_fetch_html: MagicMock, mock_ping: MagicMock
+    ):
+        """CachyOS release dirs are YYMMDD; the newest one wins and the
+        .sha256 sidecar must not be mistaken for the ISO."""
+        _section("Strategy: ubuntu_nested — CachyOS date releases")
+        mock_fetch_html.side_effect = [
+            (
+                '<a href="260426/">260426/</a>'
+                '<a href="260809/">260809/</a>'
+                '<a href="260628/">260628/</a>'
+            ),
+            (
+                '<a href="cachyos-desktop-linux-260809.iso">iso</a>'
+                '<a href="cachyos-desktop-linux-260809.iso.sha256">sum</a>'
+            ),
+        ]
+        settings = load_config()["distros"]["CachyOS"]
+        name, url = process_scraping_strategy("CachyOS Desktop", settings)
+        self.assertEqual(name, "cachyos-desktop-linux-260809.iso")
+        self.assertEqual(
+            url,
+            "https://mirror.cachyos.org/ISO/desktop/260809/"
+            "cachyos-desktop-linux-260809.iso",
+        )
+        _ok(f"Resolved to newest CachyOS release: {name}")
 
     @patch("visync.download.ping_mirror", return_value=True)
     @patch("visync.download.fetch_html")

@@ -1641,6 +1641,7 @@ class TestVariantKey(unittest.TestCase):
         cases = {
             "Pop_OS 24.04 amd64": "pop-os",
             "ARCH_202610": "arch",
+            "COS_260809": "cachyos",
             "Fedora-E-dvd-x86_64-44": "fedora-e-dvd",
             "Fedora-KDE-Live-44": "fedora-kde-live",
             "Ubuntu-Server 26.04.1 LTS amd64": "ubuntu-server",
@@ -1730,6 +1731,25 @@ class TestCleanupDeletionSafety(unittest.TestCase):
             _cleanup_old_versions(new, drive)
 
             self.assertFalse(old.exists(), "older Pop!_OS build must be removed")
+            self.assertTrue(new.exists(), "newest build must survive")
+
+    def test_cleanup_removes_older_cachyos_build(self):
+        """CachyOS volume IDs are abbreviated ("COS_..."), so the filename and
+        volume-ID variant keys only match once the abbreviation is expanded."""
+        from visync.download import _cleanup_old_versions
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            drive = self._drive(tmpdir)
+            old = _make_iso(
+                drive / "cachyos-desktop-linux-260628.iso", "COS_260628"
+            )
+            new = _make_iso(
+                drive / "cachyos-desktop-linux-260809.iso", "COS_260809"
+            )
+
+            _cleanup_old_versions(new, drive)
+
+            self.assertFalse(old.exists(), "older CachyOS build must be removed")
             self.assertTrue(new.exists(), "newest build must survive")
 
     def test_cleanup_keeps_different_variants(self):
@@ -1856,6 +1876,7 @@ class TestConfigNameConsistency(unittest.TestCase):
             "Fedora-Workstation-Live-44-1.7.aarch64.iso",
         ),
         "ArchLinux": ("ARCH_202610", "archlinux-2026.10.01-x86_64.iso"),
+        "CachyOS": ("COS_202608", "cachyos-desktop-linux-260809.iso"),
         "UbuntuServer": (
             "Ubuntu-Server 26.04.1 LTS amd64",
             "ubuntu-26.04.1-live-server-amd64.iso",

@@ -58,6 +58,15 @@ class TestIdentifyDistro(unittest.TestCase):
             self.assertEqual(result, expected)
             _ok(f"'{vid}' / '{fname}' -> {result}")
 
+    def test_cachyos_volume_id_and_filename(self) -> None:
+        _section("CachyOS: abbreviated volume ID and filename")
+        self.assertEqual(identify_distro("COS_202608", ""), "CachyOS Desktop")
+        self.assertEqual(
+            identify_distro("", "cachyos-desktop-linux-260809.iso"),
+            "CachyOS Desktop",
+        )
+        _ok("COS_202608 / cachyos-desktop-linux-260809.iso -> CachyOS Desktop")
+
     def test_filename_fallback(self) -> None:
         _section("Layer 4: Filename Regex Fallback")
         result = identify_distro("UNKNOWN", "alpine-3.19.iso")
