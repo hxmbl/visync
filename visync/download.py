@@ -1085,6 +1085,12 @@ _VERSION_IN_KEY_RE = re.compile(r"^\d+(?:\.\d+)*\.?$")
 _RELEASE_WORD_RE = re.compile(
     r"^(?:lts|esd|point|pre|rc|beta|alpha|rc\d*)$", re.IGNORECASE
 )
+# Volume IDs sometimes abbreviate the distro name. CachyOS publishes
+# "COS_260809" while its filename is "cachyos-desktop-linux-260809.iso", so
+# without expanding the abbreviation the cleanup pre-filter rejects every
+# candidate and old CachyOS builds are never removed. Only the leading token is
+# expanded; the confirmation step still compares distro and full stem.
+_VARIANT_TOKEN_ALIASES = {"cos": "cachyos"}
 
 
 def variant_key(text: str) -> str:
@@ -1108,6 +1114,7 @@ def variant_key(text: str) -> str:
         'pop-os_24.04_amd64_generic_24.iso'  -> 'pop-os-generic'
         'Ubuntu-Server 26.04.1 LTS amd64'    -> 'ubuntu-server'
         'ubuntu-24.04.1-live-server-amd64.iso' -> 'ubuntu-live-server'
+        'COS_260809'                         -> 'cachyos'
     """
     stem = re.sub(r"\.(iso|img)$", "", text, flags=re.IGNORECASE)
     # Remove arch tokens with their surrounding separator so "…-amd64" does not
@@ -1122,6 +1129,8 @@ def variant_key(text: str) -> str:
         if _RELEASE_WORD_RE.fullmatch(token):
             continue
         tokens.append(token)
+    if tokens and tokens[0] in _VARIANT_TOKEN_ALIASES:
+        tokens[0] = _VARIANT_TOKEN_ALIASES[tokens[0]]
     return "-".join(tokens)
 
 

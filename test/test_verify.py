@@ -339,6 +339,22 @@ class TestExpandUrl(unittest.TestCase):
         self.assertEqual(result, "https://releases.ubuntu.com/24.04.4/SHA256SUMS")
         _ok("Substituted {version}")
 
+    def test_cachyos_checksum_sidecar_url_and_digest(self) -> None:
+        from visync.finder import load_config
+
+        _section("expand_url: CachyOS .iso.sha256 sidecar")
+        settings = load_config()["distros"]["CachyOS"]
+        iso = "cachyos-desktop-linux-260809.iso"
+        digest = "959f6577f45e25ee9fd8c220fd221b08e4ea79412c7315c0f922dd6d86d5e33c"
+        url = expand_url(settings["checksum_url"], iso, settings["base_url"])
+        self.assertEqual(
+            url,
+            "https://mirror.cachyos.org/ISO/desktop/260809/"
+            "cachyos-desktop-linux-260809.iso.sha256",
+        )
+        self.assertEqual(parse_hashsums(f"{digest}  {iso}\n", iso), digest)
+        _ok("CachyOS checksum URL and sidecar digest resolve")
+
 
 class TestVerifyIso(unittest.TestCase):
     def _make_iso(self, tmpdir: Path, data: bytes) -> Path:

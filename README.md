@@ -109,12 +109,12 @@ Config resolution order: explicit `--config` path, then `$VISYNC_CONFIG`, then `
 |---|---|---|
 | `direct_match` | Flat index page | Arch Linux |
 | `fedora_nested` | Version dirs + variant subdirs | Fedora, Fedora KDE |
-| `ubuntu_nested` | Version dirs | Ubuntu, Linux Mint, Parrot Security |
+| `ubuntu_nested` | Version dirs | Ubuntu, CachyOS, Linux Mint, Parrot Security |
 | `nixos_channel` | Stable-channel lookup + channel page parse | NixOS Minimal, NixOS Graphical |
 | `popos_api` | JSON API | Pop!_OS |
 | `tails_api` | JSON API | Tails |
 
-**Checksum formats:** `gpg_checksum` (Fedora — inline `SHA256 (file) = hash`), `sha256sums` (Ubuntu, Arch, Linux Mint, Parrot, NixOS, Tails), `json` (Tails)
+**Checksum formats:** `gpg_checksum` (Fedora — inline `SHA256 (file) = hash`), `sha256sums` (Ubuntu, Arch, CachyOS, Linux Mint, Parrot, NixOS, Tails), `json` (Tails)
 
 Signature checking is configured separately via `signing_key_url` + `signing_key_fingerprint` and works with any signed layout, so Parrot's sectioned hash list gets both a signature check and a digest check.
 

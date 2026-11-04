@@ -533,6 +533,11 @@ def extract_iso_metadata(iso_name: str) -> dict[str, str]:
     generic = re.search(r"(\d+\.\d+(?:\.\d+)?)", iso_name)
     if generic:
         meta["version"] = generic.group(1)
+    else:
+        # Date-versioned releases such as CachyOS use YYMMDD directories.
+        dated = re.search(r"(?<!\d)(\d{6})(?!\d)", iso_name)
+        if dated:
+            meta["version"] = dated.group(1)
     return meta
 
 
