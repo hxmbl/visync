@@ -1740,12 +1740,8 @@ class TestCleanupDeletionSafety(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             drive = self._drive(tmpdir)
-            old = _make_iso(
-                drive / "cachyos-desktop-linux-260628.iso", "COS_260628"
-            )
-            new = _make_iso(
-                drive / "cachyos-desktop-linux-260809.iso", "COS_260809"
-            )
+            old = _make_iso(drive / "cachyos-desktop-linux-260628.iso", "COS_260628")
+            new = _make_iso(drive / "cachyos-desktop-linux-260809.iso", "COS_260809")
 
             _cleanup_old_versions(new, drive)
 
