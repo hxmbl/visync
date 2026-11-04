@@ -39,6 +39,11 @@ gparted = "GParted Live"
 hbcd = "Hiren's BootCD"
 hiren = "Hiren's BootCD"
 kodachi = "Linux Kodachi"
+# Mint ISOs are prefixed "linuxmint-", which normalises to a single "linuxmint"
+# token, so the "ubuntu.mint" fork override can never see a standalone "mint"
+# token in the filename. Match the prefix directly or install/remove cannot
+# target a downloaded Mint image.
+linuxmint = "Linux Mint"
 nixos-minimal = "NixOS Minimal"
 nixos-graphical = "NixOS Graphical"
 nixos = "NixOS Minimal"
@@ -175,6 +180,25 @@ version_regex = 'href="([0-9\.]+)/"'
 version_filter = '\d*[02468]\.04(\.\d+)*'
 iso_regex = 'href="(ubuntu-[0-9\.-]+desktop-amd64\.iso)"'
 checksum_url = "{base_url}{version}/SHA256SUMS"
+checksum_format = "sha256sums"
+checksum_algo = "sha256"
+
+[distros.LinuxMint]
+clean_name = "Linux Mint"
+keyword = "mint"
+strategy = "ubuntu_nested"
+# kernel.org mirrors linuxmint/stable (same bot-free mirror tree Fedora's
+# releases use). The index holds numbered release dirs (22.1/, 22.2/, ...),
+# each containing the edition ISOs and sha256sum.txt next to them.
+base_url = "https://mirrors.kernel.org/linuxmint/stable/"
+version_regex = 'href="([0-9\.]+)/"'
+# Edition selection: pin the flagship Cinnamon image. Mate and Xfce share the
+# same release directory and the resolver takes the first iso_regex match, so
+# an unpinned pattern would depend on directory listing order.
+iso_regex = 'href="(linuxmint-[0-9\.]+-cinnamon-64bit\.iso)"'
+# {version} is parsed from the ISO filename ("22.1" in
+# linuxmint-22.1-cinnamon-64bit.iso), which is also the release dir name.
+checksum_url = "{base_url}{version}/sha256sum.txt"
 checksum_format = "sha256sums"
 checksum_algo = "sha256"
 
