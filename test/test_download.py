@@ -476,7 +476,9 @@ class TestProcessScrapingStrategy(unittest.TestCase):
         )
         settings = load_config()["distros"]["OpenSUSETumbleweedDVD"]
         name, url = process_scraping_strategy("openSUSE Tumbleweed", settings)
-        self.assertEqual(name, "openSUSE-Tumbleweed-DVD-x86_64-Snapshot20261103-Media.iso")
+        self.assertEqual(
+            name, "openSUSE-Tumbleweed-DVD-x86_64-Snapshot20261103-Media.iso"
+        )
         self.assertEqual(
             url,
             "https://download.opensuse.org/tumbleweed/iso/"
@@ -502,7 +504,9 @@ class TestProcessScrapingStrategy(unittest.TestCase):
         settings = dict(load_config()["distros"]["OpenSUSETumbleweedDVD"])
         settings["base_url"] = "https://example.com/iso/"
         name, _url = process_scraping_strategy("openSUSE Tumbleweed", settings)
-        self.assertEqual(name, "openSUSE-Tumbleweed-DVD-x86_64-Snapshot20261103-Media.iso")
+        self.assertEqual(
+            name, "openSUSE-Tumbleweed-DVD-x86_64-Snapshot20261103-Media.iso"
+        )
         _ok(f"newest_match resolved to: {name}")
 
     @patch("visync.download.ping_mirror", return_value=True)
@@ -521,11 +525,12 @@ class TestProcessScrapingStrategy(unittest.TestCase):
         settings["base_url"] = "https://example.com/iso/"
         settings.pop("newest_match", None)
         name, _url = process_scraping_strategy("openSUSE Tumbleweed", settings)
-        self.assertEqual(name, "openSUSE-Tumbleweed-DVD-x86_64-Snapshot20261103-Media.iso")
+        self.assertEqual(
+            name, "openSUSE-Tumbleweed-DVD-x86_64-Snapshot20261103-Media.iso"
+        )
         _ok(f"First match kept: {name}")
         mock_fetch_html.return_value = (
-            '<a href="new-20261005.iso">new</a>'
-            '<a href="old-20250101.iso">old</a>'
+            '<a href="new-20261005.iso">new</a><a href="old-20250101.iso">old</a>'
         )
         settings = {
             "strategy": "direct_match",
