@@ -505,9 +505,7 @@ class TestProcessScrapingStrategy(unittest.TestCase):
         name, url = process_scraping_strategy("Zorin OS", settings)
         self.assertIn("18.10", name)
         self.assertIn("18.10-Core-64-bit-r1.iso", name)
-        self.assertEqual(
-            url, "https://distro.ibiblio.org/zorinos/18/" + name
-        )
+        self.assertEqual(url, "https://distro.ibiblio.org/zorinos/18/" + name)
         _ok(f"18.10 r1 wins over 18.9: {name}")
 
     @patch("visync.download.ping_mirror", return_value=True)

@@ -147,12 +147,18 @@ def extract_version_from_filename(filename: str) -> str:
         # Zorin keeps -rN maintenance rebuilds in the same directory as the
         # release itself. The revision must be folded into the version so a
         # rebuild remains an update and stays below the next point release.
-        major, minor, revision = zorin.group(1), zorin.group(2) or "", zorin.group(3) or ""
+        major, minor, revision = (
+            zorin.group(1),
+            zorin.group(2) or "",
+            zorin.group(3) or "",
+        )
         version = f"{major}.{minor}" if minor else major
         if revision:
             # r3 of plain "18" becomes 18.0.3, not 18.3 — the rebuild replaces
             # the original release, so it must sort between "18" and "18.1".
-            version = f"{version}.0.{revision}" if not minor else f"{version}.{revision}"
+            version = (
+                f"{version}.0.{revision}" if not minor else f"{version}.{revision}"
+            )
         return version
 
     snapshot = re.search(

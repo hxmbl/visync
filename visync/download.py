@@ -518,10 +518,15 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
                 if f
             ]
             if not candidates:
-                return fail(f"iso_regex matched nothing in {iso_dir_url} (upstream layout?)")
+                return fail(
+                    f"iso_regex matched nothing in {iso_dir_url} (upstream layout?)"
+                )
             filename = max(
                 candidates,
-                key=lambda f: (parse_version(extract_version_from_filename(f)) or (), f),
+                key=lambda f: (
+                    parse_version(extract_version_from_filename(f)) or (),
+                    f,
+                ),
             )
             return filename, f"{iso_dir_url}{filename}"
 

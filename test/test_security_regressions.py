@@ -1935,7 +1935,9 @@ class TestCleanupDeletionSafety(unittest.TestCase):
             self.assertTrue(lite.exists())
             self.assertTrue(edu.exists())
             self.assertTrue(new_core.exists())
-            print(f"Cleanup preserved Lite and Education when updating Core: {new_core.name}")
+            print(
+                f"Cleanup preserved Lite and Education when updating Core: {new_core.name}"
+            )
 
     def test_cleanup_never_touches_unidentified_isos(self):
         from visync.download import _cleanup_old_versions
