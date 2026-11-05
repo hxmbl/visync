@@ -2049,6 +2049,10 @@ class TestConfigNameConsistency(unittest.TestCase):
             "Zorin OS 18.1 Core 64bit",
             "Zorin-OS-18.1-Core-64-bit.iso",
         ),
+        "EndeavourOS": (
+            "",
+            "EndeavourOS_Titan-Nova-2026.08.15.iso",
+        ),
     }
 
     def test_every_clean_name_is_identifiable(self):

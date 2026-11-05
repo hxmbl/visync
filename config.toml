@@ -55,6 +55,9 @@ nixos = "NixOS Minimal"
 # "opensuse" filename token and no volume ID match, so match the prefix directly
 # or install/remove cannot target a downloaded Tumbleweed image.
 opensuse = "openSUSE Tumbleweed"
+# EndeavourOS ISO filenames use the EndeavourOS_ prefix and are not identified
+# reliably by their volume ID on every release, so match the filename directly.
+endeavouros = "EndeavourOS"
 # Leap ISOs are filed as "Leap-16.1-offline-installer-x86_64.install.iso", which
 # produces a "leap" filename token. Match the prefix directly or install/remove
 # cannot target a downloaded Leap image.
@@ -380,6 +383,19 @@ version_filter = '1[5-9]\.[0-9]+'
 variant_path = "offline"
 iso_regex = 'href="(Leap-[0-9]+\.[0-9]+-offline-installer-x86_64\.install\.iso)"'
 checksum_url = "{base_url}{version}/offline/{iso_name}.sha512"
+checksum_format = "sha256sums"
+checksum_algo = "sha512"
+
+[distros.EndeavourOS]
+clean_name = "EndeavourOS"
+keyword = "endeavouros"
+strategy = "direct_match"
+# The mirror index contains the rolling set of dated installer images. Select
+# the newest dated x86_64 ISO and use its adjacent SHA-512 sidecar.
+base_url = "https://mirror.alpix.eu/endeavouros/iso/"
+iso_regex = 'href="(EndeavourOS_[A-Za-z0-9_-]+-[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.iso)"'
+newest_match = true
+checksum_url = "{base_url}{iso_name}.sha512sum"
 checksum_format = "sha256sums"
 checksum_algo = "sha512"
 
