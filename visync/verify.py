@@ -125,6 +125,12 @@ _ZORIN_ISO_RE = re.compile(
     r"^Zorin-OS-([0-9]+)(?:\.([0-9]+))?-(?:Core(?:-Beta)?|Lite|Education)-64-bit(?:-r([0-9]+))?\.iso$",
     re.IGNORECASE,
 )
+# openSUSE Leap: Leap-16.1-offline-installer-x86_64.install.iso
+# Extract the version (e.g., 16.1) from the filename.
+_LEAP_ISO_RE = re.compile(
+    r"^Leap-([0-9]+\.[0-9]+)-offline-installer-x86_64\.install\.iso$",
+    re.IGNORECASE,
+)
 
 
 def extract_version_from_filename(filename: str) -> str:
@@ -160,6 +166,12 @@ def extract_version_from_filename(filename: str) -> str:
                 f"{version}.0.{revision}" if not minor else f"{version}.{revision}"
             )
         return version
+
+    leap = _LEAP_ISO_RE.match(filename)
+    if leap:
+        # openSUSE Leap offline installer: Leap-16.1-offline-installer-x86_64.install.iso
+        # The version is the first group (e.g., 16.1).
+        return leap.group(1)
 
     snapshot = re.search(
         r"(?<![0-9])Snapshot([0-9]{8})(?![0-9])", filename, re.IGNORECASE

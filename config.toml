@@ -55,6 +55,10 @@ nixos = "NixOS Minimal"
 # "opensuse" filename token and no volume ID match, so match the prefix directly
 # or install/remove cannot target a downloaded Tumbleweed image.
 opensuse = "openSUSE Tumbleweed"
+# Leap ISOs are filed as "Leap-16.1-offline-installer-x86_64.install.iso", which
+# produces a "leap" filename token. Match the prefix directly or install/remove
+# cannot target a downloaded Leap image.
+leap = "openSUSE Leap"
 parrot = "Parrot Security"
 pond = "Pond"
 pop = "Pop!_OS"
@@ -74,6 +78,7 @@ zorin = "Zorin OS"
 # configured distro impossible to remove (test_verify_consistency_enforces this).
 fedora-kde = "Fedora KDE"
 fedora-arm = "Fedora ARM"
+opensuse-leap = "openSUSE Leap"
 ubuntu-desktop = "Ubuntu Desktop"
 ubuntu-server = "Ubuntu Server"
 
@@ -360,6 +365,23 @@ newest_match = true
 checksum_url = "{base_url}{iso_name}.sha256"
 checksum_format = "sha256sums"
 checksum_algo = "sha256"
+
+[distros.OpenSUSELeap]
+clean_name = "openSUSE Leap"
+keyword = "leap"
+strategy = "fedora_nested"
+# download.opensuse.org/distribution/leap/ holds version directories (15.6/, 16.1/, ...).
+# Legacy 42.x directories exist, so version_filter is required to select stable releases.
+base_url = "https://download.opensuse.org/distribution/leap/"
+version_regex = 'href="([0-9]+\.[0-9]+)/"'
+# Filter to 15.x and 16.x stable series, excluding legacy 42.x.
+version_filter = '1[5-9]\.[0-9]+'
+# Select the x86_64 offline installer (non-build variant for deterministic selection).
+variant_path = "offline"
+iso_regex = 'href="(Leap-[0-9]+\.[0-9]+-offline-installer-x86_64\.install\.iso)"'
+checksum_url = "{base_url}{version}/offline/{iso_name}.sha512"
+checksum_format = "sha256sums"
+checksum_algo = "sha512"
 
 [distros.ZorinOS]
 clean_name = "Zorin OS"

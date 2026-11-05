@@ -52,6 +52,7 @@ class TestIdentifyDistro(unittest.TestCase):
             ("NIXOS_24", "nixos.iso", "NixOS Minimal"),
             ("", "nixos-graphical-26.05.iso", "NixOS Graphical"),
             ("", "systemrescue-amd64.iso", "SystemRescue"),
+            ("", "Leap-16.1-offline-installer-x86_64.install.iso", "openSUSE Leap"),
         ]
         for vid, fname, expected in cases:
             result = identify_distro(vid, fname)
