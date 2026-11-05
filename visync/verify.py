@@ -117,6 +117,14 @@ _ELEMENTARY_ISO_RE = re.compile(
     r"^elementaryos-(\d+(?:\.\d+)*)-stable-[a-z0-9_]+\.(\d{8})\.iso$",
     re.IGNORECASE,
 )
+# Zorin OS: Zorin-OS-18-Core-64-bit.iso, Zorin-OS-18.1-Core-64-bit-r3.iso
+# Also handles Beta, Lite, Education editions for version extraction (though
+# the resolver regex only selects Core for the provider). The -rN revision
+# must be folded into the version so rebuilds sort correctly.
+_ZORIN_ISO_RE = re.compile(
+    r"^Zorin-OS-([0-9]+)(?:\.([0-9]+))?-(?:Core(?:-Beta)?|Lite|Education)-64-bit(?:-r([0-9]+))?\.iso$",
+    re.IGNORECASE,
+)
 
 
 def extract_version_from_filename(filename: str) -> str:
@@ -133,6 +141,25 @@ def extract_version_from_filename(filename: str) -> str:
         # Keep the build date in the version: 8.1.20260219 sorts above
         # 8.1.20260101, so a rebuild of the same release is an update.
         return f"{elementary.group(1)}.{elementary.group(2)}"
+
+    zorin = _ZORIN_ISO_RE.match(filename)
+    if zorin:
+        # Zorin keeps -rN maintenance rebuilds in the same directory as the
+        # release itself. The revision must be folded into the version so a
+        # rebuild remains an update and stays below the next point release.
+        major, minor, revision = (
+            zorin.group(1),
+            zorin.group(2) or "",
+            zorin.group(3) or "",
+        )
+        version = f"{major}.{minor}" if minor else major
+        if revision:
+            # r3 of plain "18" becomes 18.0.3, not 18.3 — the rebuild replaces
+            # the original release, so it must sort between "18" and "18.1".
+            version = (
+                f"{version}.0.{revision}" if not minor else f"{version}.{revision}"
+            )
+        return version
 
     snapshot = re.search(
         r"(?<![0-9])Snapshot([0-9]{8})(?![0-9])", filename, re.IGNORECASE
@@ -542,6 +569,8 @@ def extract_iso_metadata(iso_name: str) -> dict[str, str]:
         # extract_version_from_filename only recovers "26.05.11045".
         "channel": "",
         "release": "",
+        # Major release number for checksum URL expansion (e.g., Zorin OS 18)
+        "major": "",
     }
 
     fedora = re.match(
@@ -603,6 +632,13 @@ def extract_iso_metadata(iso_name: str) -> dict[str, str]:
         meta["version"] = f"{elementary.group(1)}.{elementary.group(2)}"
         return meta
 
+    zorin = _ZORIN_ISO_RE.match(iso_name)
+    if zorin:
+        major = zorin.group(1)
+        meta["version"] = extract_version_from_filename(iso_name)
+        meta["major"] = major
+        return meta
+
     generic = re.search(r"(\d+\.\d+(?:\.\d+)?)", iso_name)
     if generic:
         meta["version"] = generic.group(1)
@@ -636,6 +672,7 @@ def expand_url(
         .replace("{checksum_stem}", meta["checksum_stem"])
         .replace("{channel}", meta["channel"])
         .replace("{release}", meta["release"])
+        .replace("{major}", meta["major"])
     )
 
 

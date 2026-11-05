@@ -415,6 +415,83 @@ class TestElementaryVersion(unittest.TestCase):
         self.assertEqual(meta["version"], "8.1.20260219")
 
 
+class TestZorinVersion(unittest.TestCase):
+    """Zorin keeps -rN maintenance rebuilds of a release in the same directory
+    as the release itself, with no version change of their own. The revision
+    must be folded into the version so a rebuild remains an update — and so it
+    stays below the point release that later supersedes it."""
+
+    def test_point_release_version_is_the_version(self) -> None:
+        _section("Zorin OS version: point release")
+        self.assertEqual(
+            extract_version_from_filename("Zorin-OS-18.1-Core-64-bit.iso"),
+            "18.1",
+        )
+        _ok("18.1 extracted as the version")
+
+    def test_revision_rebuild_sorts_above_its_release(self) -> None:
+        _section("Zorin OS version: -rN maintenance rebuild")
+        self.assertEqual(
+            extract_version_from_filename("Zorin-OS-18-Core-64-bit-r3.iso"),
+            "18.0.3",
+        )
+        self.assertGreater(compare_versions("18.0.3", "18"), 0)
+        _ok("18 Core r3 (18.0.3) compares above 18")
+
+    def test_revision_stays_below_the_next_point_release(self) -> None:
+        """Upstream order: 18 Core rN (Dec/Jan) predates 18.1 (Apr), so the
+        revision must not sort above it."""
+        self.assertLess(compare_versions("18.0.3", "18.1"), 0)
+        _ok("18.0.3 stays below 18.1")
+
+    def test_revision_of_a_point_release_sorts_above_it(self) -> None:
+        self.assertEqual(
+            extract_version_from_filename("Zorin-OS-18.1-Core-64-bit-r2.iso"),
+            "18.1.2",
+        )
+        self.assertGreater(compare_versions("18.1.2", "18.1"), 0)
+        _ok("18.1 r2 (18.1.2) is an update over 18.1, below a future 18.2")
+
+    def test_beta_and_editions_get_base_versions(self) -> None:
+        """Beta images and sibling editions parse to their base version; they
+        are excluded from the provider by the resolver regex either way."""
+        self.assertEqual(
+            extract_version_from_filename("Zorin-OS-18-Core-Beta-64-bit-r2.iso"),
+            "18.0.2",
+        )
+        self.assertEqual(
+            extract_version_from_filename("Zorin-OS-18.1-Lite-64-bit.iso"),
+            "18.1",
+        )
+        _ok("Beta and Lite parse without disturbing Core handling")
+
+    def test_non_zorin_filenames_keep_their_own_extraction(self) -> None:
+        """The Zorin pattern is filename-anchored; other providers' names and
+        even a hostile lookalike must be untouched."""
+        self.assertEqual(
+            extract_version_from_filename("ZorinOS-18-Core-64-bit.iso"), "18"
+        )
+        self.assertEqual(
+            extract_version_from_filename("ubuntu-24.04.4-live-server-amd64.iso"),
+            "24.04.4",
+        )
+        self.assertEqual(
+            extract_version_from_filename("Zorin-OS-18.1-Core-32-bit.iso"), "18.1"
+        )
+        _ok("Non-Zorin and non-64-bit names keep generic extraction")
+
+    def test_metadata_carries_major_release(self) -> None:
+        """{major} targets the release directory holding the sums file: a point
+        release's checksums live next to the base image, not in an 18.1/ dir."""
+        meta = extract_iso_metadata("Zorin-OS-18.1-Core-64-bit.iso")
+        self.assertEqual(meta["version"], "18.1")
+        self.assertEqual(meta["major"], "18")
+        meta_r = extract_iso_metadata("Zorin-OS-18-Core-64-bit-r3.iso")
+        self.assertEqual(meta_r["version"], "18.0.3")
+        self.assertEqual(meta_r["major"], "18")
+        _ok("{major} set from the filename for checksum URL expansion")
+
+
 class TestSnapshotVersion(unittest.TestCase):
     def test_snapshot_date_is_the_version(self) -> None:
         _section("openSUSE snapshot version: SnapshotYYYYMMDD date")
@@ -491,6 +568,31 @@ class TestExpandUrl(unittest.TestCase):
         )
         self.assertEqual(parse_hashsums(f"{digest}  {iso}\n", iso), digest)
         _ok("CachyOS checksum URL and sidecar digest resolve")
+
+    def test_zorin_sums_lives_in_the_major_release_directory(self) -> None:
+        """Zorin publishes one SHA256SUMS.txt per major-release directory that
+        lists every artifact of that release; {major} must address it whether
+        the newest artifact is a point release or an -rN rebuild."""
+        from visync.finder import load_config
+
+        _section("expand_url: Zorin major-release SHA256SUMS.txt")
+        settings = load_config()["distros"]["ZorinOS"]
+        for iso, expected_version in (
+            ("Zorin-OS-18.1-Core-64-bit.iso", "18"),
+            ("Zorin-OS-18-Core-64-bit-r3.iso", "18"),
+        ):
+            with self.subTest(iso=iso):
+                url = expand_url(settings["checksum_url"], iso, settings["base_url"])
+                self.assertEqual(
+                    url,
+                    f"https://distro.ibiblio.org/zorinos/{expected_version}/"
+                    "SHA256SUMS.txt",
+                )
+        # The published sums layout selects a digest by exact filename.
+        digest = "44649b97bd307fc4c8529205d098ebbf98575a1e1ba2ee7d7005b697af1721d5"
+        iso = "Zorin-OS-18.1-Core-64-bit.iso"
+        self.assertEqual(parse_hashsums(f"{digest}  {iso}\n", iso), digest)
+        _ok("Zorin checksum URL and filename-keyed digest resolve")
 
 
 class TestVerifyIso(unittest.TestCase):

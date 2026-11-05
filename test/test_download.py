@@ -426,6 +426,127 @@ class TestProcessScrapingStrategy(unittest.TestCase):
 
     @patch("visync.download.ping_mirror", return_value=True)
     @patch("visync.download.fetch_html")
+    def test_zorin_picks_newest_core_from_shuffled_listing(
+        self, mock_fetch_html: MagicMock, mock_ping: MagicMock
+    ):
+        """Zorin's release directory keeps every artifact of the major release
+        (base image, -rN rebuilds, beta images, sibling editions) in listing
+        order, which is not version order. newest_match must pick the greatest
+        (version, revision) — 18.1 Core above 18 Core r3 — and resolve the same
+        artifact however the listing is shuffled."""
+        _section("Strategy: ubuntu_nested — Zorin Core newest-artifact selection")
+        root = (
+            '<a href="18/">18/</a><a href="17/">17/</a>'
+            '<a href="public/">public/</a><a href="16/">16/</a><a href="15/">15/</a>'
+        )
+        # Real listing content from distro.ibiblio.org/zorinos/18/, shuffled
+        # away from upstream order.
+        release_dir = (
+            '<a href="Zorin-OS-18-Education-64-bit-r2.iso">edu</a>'
+            '<a href="SHA256SUMS.txt">sums</a>'
+            '<a href="Zorin-OS-18-Core-64-bit-r3.iso">r3</a>'
+            '<a href="Zorin-OS-18.1-Lite-64-bit.iso">lite</a>'
+            '<a href="Zorin-OS-18-Core-64-bit-r1.iso">r1</a>'
+            '<a href="Zorin-OS-18.1-Core-64-bit.iso">newest</a>'
+            '<a href="Zorin-OS-18-Core-64-bit-r2.iso">r2</a>'
+            '<a href="Zorin-OS-18-Core-Beta-64-bit.iso">beta</a>'
+            '<a href="Zorin-OS-18-Core-64-bit.iso">base</a>'
+            '<a href="Zorin-OS-18-Core-Beta-64-bit-r1.iso">beta-r1</a>'
+            '<a href="Zorin-OS-18.1-Education-64-bit.iso">edu-181</a>'
+        )
+        settings = load_config()["distros"]["ZorinOS"]
+        mock_fetch_html.side_effect = [root, release_dir]
+        name, url = process_scraping_strategy("Zorin OS", settings)
+        self.assertEqual(name, "Zorin-OS-18.1-Core-64-bit.iso")
+        self.assertEqual(
+            url,
+            "https://distro.ibiblio.org/zorinos/18/Zorin-OS-18.1-Core-64-bit.iso",
+        )
+        _ok(f"Resolved to newest Core artifact: {name}")
+
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.fetch_html")
+    def test_zorin_revision_rebuild_resolves_as_newest(
+        self, mock_fetch_html: MagicMock, mock_ping: MagicMock
+    ):
+        """A -rN rebuild of the newest release sorts above its base image, so
+        18.1 r1 beats a plain 18.1 and update detection still fires."""
+        _section("Strategy: ubuntu_nested — Zorin revision rebuild newest")
+        root = '<a href="17/">17/</a><a href="18/">18/</a>'
+        release_dir = (
+            '<a href="Zorin-OS-18.1-Core-64-bit.iso">base</a>'
+            '<a href="Zorin-OS-18.1-Core-64-bit-r1.iso">r1</a>'
+            '<a href="Zorin-OS-18-Education-64-bit.iso">edu</a>'
+        )
+        settings = load_config()["distros"]["ZorinOS"]
+        mock_fetch_html.side_effect = [root, release_dir]
+        name, url = process_scraping_strategy("Zorin OS", settings)
+        self.assertEqual(name, "Zorin-OS-18.1-Core-64-bit-r1.iso")
+        self.assertIn("/18/Zorin-OS-18.1-Core-64-bit-r1.iso", url)
+        _ok(f"Resolved to newest revision: {name}")
+
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.fetch_html")
+    def test_zorin_beta_future_point_release_resolves_deterministically(
+        self, mock_fetch_html: MagicMock, mock_ping: MagicMock
+    ):
+        """A two-digit point release (18.10) would sort lexicographically below
+        18.9, so selection must be by parsed version, not raw filename order"""
+        _section("Strategy: ubuntu_nested — Zorin point-release ordering")
+        root = '<a href="18/">18/</a>'
+        release_dir = (
+            '<a href="Zorin-OS-18.9-Core-64-bit-r2.iso">r2</a>'
+            '<a href="Zorin-OS-18.10-Core-64-bit-R1.iso">r1-a</a>'
+            '<a href="Zorin-OS-18.9-Core-64-bit.iso">189-base</a>'
+            '<a href="Zorin-OS-18.10-Core-64-bit-r1.iso">r1-b</a>'
+        )
+        settings = load_config()["distros"]["ZorinOS"]
+        mock_fetch_html.side_effect = [root, release_dir]
+        name, url = process_scraping_strategy("Zorin OS", settings)
+        self.assertIn("18.10", name)
+        self.assertIn("18.10-Core-64-bit-r1.iso", name)
+        self.assertEqual(url, "https://distro.ibiblio.org/zorinos/18/" + name)
+        _ok(f"18.10 r1 wins over 18.9: {name}")
+
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.fetch_html")
+    def test_zorin_no_core_match_is_unreachable_not_stale(
+        self, mock_fetch_html: MagicMock, mock_ping: MagicMock
+    ):
+        """If upstream stops publishing Core-64-bit artifacts, the resolver
+        must fail loudly rather than silently resolve nothing."""
+        _section("Strategy: ubuntu_nested — Zorin no Core match")
+        root = '<a href="18/">18/</a>'
+        release_dir = '<a href="Zorin-OS-18.1-Lite-64-bit.iso">lite</a>'
+        settings = load_config()["distros"]["ZorinOS"]
+        mock_fetch_html.side_effect = [root, release_dir]
+        name, url = process_scraping_strategy("Zorin OS", settings)
+        self.assertEqual(name, "")
+        self.assertEqual(url, "")
+        self.assertTrue(settings["resolve_error"])
+        _ok(f"Fails with reason: {settings['resolve_error']}")
+
+    def test_zorin_checksum_config_points_at_major_directory(self) -> None:
+        """The sums file is published per major release; the checksum URL must
+        expand to it for both a point release and an -rN rebuild."""
+        from visync.verify import expand_url
+
+        _section("Zorin checksum URL expansion")
+        settings = load_config()["distros"]["ZorinOS"]
+        self.assertEqual(settings["checksum_url"], "{base_url}{major}/SHA256SUMS.txt")
+        for iso in (
+            "Zorin-OS-18.1-Core-64-bit.iso",
+            "Zorin-OS-18-Core-64-bit-r3.iso",
+        ):
+            with self.subTest(iso=iso):
+                url = expand_url(settings["checksum_url"], iso, settings["base_url"])
+                self.assertEqual(
+                    url, "https://distro.ibiblio.org/zorinos/18/SHA256SUMS.txt"
+                )
+        _ok("Both point releases and revisions resolve to the major dir")
+
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.fetch_html")
     def test_kali_picks_installer_amd64(
         self, mock_fetch_html: MagicMock, mock_ping: MagicMock
     ):
