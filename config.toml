@@ -51,6 +51,10 @@ linuxmint = "Linux Mint"
 nixos-minimal = "NixOS Minimal"
 nixos-graphical = "NixOS Graphical"
 nixos = "NixOS Minimal"
+# Tumbleweed ISOs are filed as "openSUSE-Tumbleweed-…", which produces a single
+# "opensuse" filename token and no volume ID match, so match the prefix directly
+# or install/remove cannot target a downloaded Tumbleweed image.
+opensuse = "openSUSE Tumbleweed"
 parrot = "Parrot Security"
 pond = "Pond"
 pop = "Pop!_OS"
@@ -316,6 +320,39 @@ strategy = "direct_match"
 base_url = "https://cdimage.kali.org/current/"
 iso_regex = 'href="(kali-linux-[0-9]+\.[0-9]+-installer-amd64\.iso)"'
 checksum_url = "{base_url}SHA256SUMS"
+checksum_format = "sha256sums"
+checksum_algo = "sha256"
+
+[distros.DebianNetinst]
+clean_name = "Debian"
+keyword = "debian"
+strategy = "direct_match"
+# cdimage.debian.org .../iso-cd/ is a flat index of the current stable amd64
+# media together with SHA256SUMS. Only the standard netinst installer is in
+# scope (live Debian images are not); the regex requires a digit directly after
+# "debian-" so the debian-edu/debian-mac flavors cannot be picked up.
+base_url = "https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/"
+iso_regex = 'href="(debian-[0-9]+\.[0-9]+\.[0-9]+-amd64-netinst\.iso)"'
+checksum_url = "{base_url}SHA256SUMS"
+checksum_format = "sha256sums"
+checksum_algo = "sha256"
+
+[distros.OpenSUSETumbleweedDVD]
+clean_name = "openSUSE Tumbleweed"
+keyword = "opensuse"
+strategy = "direct_match"
+# download.opensuse.org/tumbleweed/iso/ is a flat index holding dated snapshot
+# media (openSUSE-Tumbleweed-DVD-x86_64-Snapshot20261103-Media.iso) next to the
+# mutable "Current.iso" alias and per-file .sha256/.asc sidecars. The mutable
+# alias carries a stable URL but no update signal (the bytes change underneath),
+# so match the dated snapshot filename instead: its dateset change IS the update
+# detection. "Snapshot" + "-Media" is part of the real filename, not decoration.
+base_url = "https://download.opensuse.org/tumbleweed/iso/"
+iso_regex = 'href="./?(openSUSE-Tumbleweed-DVD-x86_64-Snapshot[0-9]{8}-Media\.iso)"'
+# The listing prefixes download hrefs with "./", so the regex must allow an
+# optional ./ between the quote and the filename.
+newest_match = true
+checksum_url = "{base_url}{iso_name}.sha256"
 checksum_format = "sha256sums"
 checksum_algo = "sha256"
 

@@ -402,7 +402,7 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
         warn(f"Mirror unreachable (ping failed): {base_url}")
         return fail(f"no route to mirror {base_url}")
 
-    # Strategy A: Direct Index File Tracking (e.g. Arch Linux)
+    # Strategy A: Direct Index File Tracking (e.g. Arch Linux, Kali, Tumbleweed)
     if strategy == "direct_match":
         if not base_url or not iso_regex:
             warn(f"{name} — direct_match requires base_url and iso_regex")
@@ -410,13 +410,22 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
         html = fetch_html(base_url)
         if not html:
             return fail(f"could not fetch index page {base_url}")
-        match = re.search(iso_regex, html)
-        if match:
-            filename = _safe_filename(match.group(1))
-            if not filename:
-                return fail(f"index page {base_url} matched an unsafe filename")
-            return filename, f"{base_url.rstrip('/')}/{filename}"
-        return fail(f"iso_regex matched nothing on {base_url}")
+        # Default is first-match-wins (unchanged for Arch/Kali). With
+        # newest_match the lexicographically greatest filename wins: fixed-width
+        # date stamps in filenames (e.g. SnapshotYYYYMMDD) make lexicographic
+        # order equal numeric order, so several snapshots on one page resolve
+        # deterministically to the newest instead of upstream listing order.
+        if settings.get("newest_match"):
+            filenames = [m.group(1) for m in re.finditer(iso_regex, html)]
+            if not filenames:
+                return fail(f"iso_regex matched nothing on {base_url}")
+            filename = _safe_filename(max(filenames))
+        else:
+            match = re.search(iso_regex, html)
+            filename = _safe_filename(match.group(1)) if match else ""
+        if not filename:
+            return fail(f"index page {base_url} matched an unsafe filename")
+        return filename, f"{base_url.rstrip('/')}/{filename}"
 
     # Strategy B: Two-Tier Version Directory Traversal for Fedora
     if strategy == "fedora_nested":
@@ -1296,6 +1305,11 @@ def variant_key(text: str) -> str:
     # Remove arch tokens with their surrounding separator so "…-amd64" does not
     # leave a dangling hyphen, then drop standalone version and release words.
     stem = _ARCH_IN_KEY_RE.sub(" ", stem)
+    # openSUSE snapshot dates are the version of the snapshot: drop them so two
+    # snapshots of one variant share a key and cleanup treats an old snapshot
+    # as an old build of the same variant (the date itself is the version, as
+    # extracted separately by verify.extract_version_from_filename).
+    stem = re.sub(r"-?snapshot[0-9]{8}-?", " ", stem, flags=re.IGNORECASE)
     tokens = []
     for token in re.split(r"[\s_\-]+", stem.lower()):
         if not token:

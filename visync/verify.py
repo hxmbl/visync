@@ -134,6 +134,15 @@ def extract_version_from_filename(filename: str) -> str:
         # 8.1.20260101, so a rebuild of the same release is an update.
         return f"{elementary.group(1)}.{elementary.group(2)}"
 
+    snapshot = re.search(
+        r"(?<![0-9])Snapshot([0-9]{8})(?![0-9])", filename, re.IGNORECASE
+    )
+    if snapshot:
+        # openSUSE Tumbleweed snapshot media: SnapshotYYYYMMDD is the version.
+        # Keep the raw date so 20261103 sorts above 20260101 and a newer
+        # snapshot remains an update, mirroring the elementary build date.
+        return snapshot.group(1)
+
     stem = re.sub(r"\.(iso|img)$", "", filename, flags=re.IGNORECASE)
     stem = _ARCH_TOKEN_RE.sub("-", stem)
     for token in re.split(r"[\s_\-]+", stem):

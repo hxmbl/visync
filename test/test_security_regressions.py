@@ -1969,6 +1969,11 @@ class TestConfigNameConsistency(unittest.TestCase):
             "elementary OS 8.1 amd64",
             "elementaryos-8.1-stable-amd64.20260219.iso",
         ),
+        "DebianNetinst": ("", "debian-13.7.0-amd64-netinst.iso"),
+        "OpenSUSETumbleweedDVD": (
+            "",
+            "openSUSE-Tumbleweed-DVD-x86_64-20260201.iso",
+        ),
     }
 
     def test_every_clean_name_is_identifiable(self):

@@ -160,6 +160,20 @@ class TestVariantStem(unittest.TestCase):
         self.assertEqual(result, "arch")
         _ok(f"Result: {result}")
 
+    def test_opensuse_snapshots_share_a_variant_key(self):
+        """Two dated snapshots of one Tumbleweed variant must collapse to the
+        same variant key (the date is the version, not part of the identity),
+        or cleanup would never recognize an installed older snapshot."""
+        _section("variant_key: openSUSE snapshots")
+        result_a = _variant_stem(
+            "openSUSE-Tumbleweed-DVD-x86_64-Snapshot20260101-Media.iso"
+        )
+        result_b = _variant_stem(
+            "openSUSE-Tumbleweed-DVD-x86_64-Snapshot20261103-Media.iso"
+        )
+        self.assertEqual(result_a, result_b)
+        _ok(f"Shared key: {result_a}")
+
     def test_volume_id_and_filename_share_a_variant_prefix(self):
         """The invariant that was violated.
 
@@ -434,6 +448,98 @@ class TestProcessScrapingStrategy(unittest.TestCase):
             "https://cdimage.kali.org/current/kali-linux-2026.3-installer-amd64.iso",
         )
         _ok(f"Resolved to Kali installer: {name}")
+
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.fetch_html")
+    def test_opensuse_picks_dated_snapshot(
+        self, mock_fetch_html: MagicMock, mock_ping: MagicMock
+    ):
+        """download.opensuse.org/tumbleweed/iso/ holds dated snapshot media next
+        to the mutable Current.iso alias, live flavors, checksum sidecars and
+        mirrorlist stubs; only the Tumbleweed DVD snapshot may be selected, and
+        the snapshot date change is the update signal (never the alias)."""
+        _section("Strategy: direct_match — openSUSE Tumbleweed dated snapshot")
+        mock_fetch_html.return_value = (
+            '<a href="./Changes.Changes.txt">changes</a>'
+            '<a href="./openSUSE-MicroOS-DVD-x86_64-Current.iso">micro-current</a>'
+            '<a href="./openSUSE-MicroOS-DVD-x86_64-Snapshot20261103-Media.iso">micro-snap</a>'
+            '<a href="./openSUSE-Tumbleweed-DVD-x86_64-Current.iso">alias</a>'
+            '<a href="./openSUSE-Tumbleweed-DVD-x86_64-Current.iso.sha256">alias-sha</a>'
+            '<a href="./openSUSE-Tumbleweed-DVD-x86_64-Snapshot20261103-Media.iso">snap</a>'
+            '<a href="./openSUSE-Tumbleweed-DVD-x86_64-Snapshot20261103-Media.iso.sha256">'
+            "snap-sha</a>"
+            '<a href="./openSUSE-Tumbleweed-DVD-x86_64-Snapshot20261103-Media.iso.sha256.asc">'
+            "snap-sha-asc</a>"
+            '<a href="./openSUSE-Tumbleweed-KDE-Live-x86_64-Snapshot20261103-Media.iso">'
+            "kde-live</a>"
+            '<a href="./TW-offline-installer-x86_64.iso">tw</a>'
+        )
+        settings = load_config()["distros"]["OpenSUSETumbleweedDVD"]
+        name, url = process_scraping_strategy("openSUSE Tumbleweed", settings)
+        self.assertEqual(
+            name, "openSUSE-Tumbleweed-DVD-x86_64-Snapshot20261103-Media.iso"
+        )
+        self.assertEqual(
+            url,
+            "https://download.opensuse.org/tumbleweed/iso/"
+            "openSUSE-Tumbleweed-DVD-x86_64-Snapshot20261103-Media.iso",
+        )
+        _ok(f"Resolved to dated snapshot: {name}")
+
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.fetch_html")
+    def test_newest_match_picks_latest_snapshot(
+        self, mock_fetch_html: MagicMock, mock_ping: MagicMock
+    ):
+        """newest_match selects the lexicographically greatest filename, which
+        for fixed-width date stamps is deterministic newest first — regardless
+        of the order upstream lists the files in."""
+        _section("Strategy: direct_match — newest_match picks latest snapshot")
+        # Newest listed BEFORE the older ones: first-match would be wrong here.
+        mock_fetch_html.return_value = (
+            '<a href="./openSUSE-Tumbleweed-DVD-x86_64-Snapshot20261103-Media.iso">new</a>'
+            '<a href="./openSUSE-Tumbleweed-DVD-x86_64-Snapshot20251001-Media.iso">old</a>'
+            '<a href="./openSUSE-Tumbleweed-DVD-x86_64-Snapshot20260201-Media.iso">mid</a>'
+        )
+        settings = dict(load_config()["distros"]["OpenSUSETumbleweedDVD"])
+        settings["base_url"] = "https://example.com/iso/"
+        name, _url = process_scraping_strategy("openSUSE Tumbleweed", settings)
+        self.assertEqual(
+            name, "openSUSE-Tumbleweed-DVD-x86_64-Snapshot20261103-Media.iso"
+        )
+        _ok(f"newest_match resolved to: {name}")
+
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.fetch_html")
+    def test_default_still_first_match(
+        self, mock_fetch_html: MagicMock, mock_ping: MagicMock
+    ):
+        """Without newest_match, direct_match keeps its original first-match
+        behavior (Arch/Kali must not silently change selection)."""
+        _section("Strategy: direct_match — default keeps first match")
+        mock_fetch_html.return_value = (
+            '<a href="./openSUSE-Tumbleweed-DVD-x86_64-Snapshot20261103-Media.iso">new</a>'
+            '<a href="./openSUSE-Tumbleweed-DVD-x86_64-Snapshot20251001-Media.iso">old</a>'
+        )
+        settings = dict(load_config()["distros"]["OpenSUSETumbleweedDVD"])
+        settings["base_url"] = "https://example.com/iso/"
+        settings.pop("newest_match", None)
+        name, _url = process_scraping_strategy("openSUSE Tumbleweed", settings)
+        self.assertEqual(
+            name, "openSUSE-Tumbleweed-DVD-x86_64-Snapshot20261103-Media.iso"
+        )
+        _ok(f"First match kept: {name}")
+        mock_fetch_html.return_value = (
+            '<a href="new-20261005.iso">new</a><a href="old-20250101.iso">old</a>'
+        )
+        settings = {
+            "strategy": "direct_match",
+            "base_url": "https://example.com/",
+            "iso_regex": 'href="([a-z]+-[0-9]+\\.iso)"',
+        }
+        name, _url = process_scraping_strategy("Test", settings)
+        self.assertEqual(name, "new-20261005.iso")
+        _ok(f"Unconfigured distro keeps first match: {name}")
 
     @patch("visync.download.ping_mirror", return_value=True)
     @patch("visync.download.fetch_html")

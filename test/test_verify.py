@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from visync.verify import (
     ChecksumUnavailable,
+    compare_versions,
     compute_iso_hash,
     expand_url,
     extract_iso_metadata,
@@ -412,6 +413,35 @@ class TestElementaryVersion(unittest.TestCase):
     def test_metadata_carries_combined_version(self) -> None:
         meta = extract_iso_metadata("elementaryos-8.1-stable-amd64.20260219.iso")
         self.assertEqual(meta["version"], "8.1.20260219")
+
+
+class TestSnapshotVersion(unittest.TestCase):
+    def test_snapshot_date_is_the_version(self) -> None:
+        _section("openSUSE snapshot version: SnapshotYYYYMMDD date")
+        self.assertEqual(
+            extract_version_from_filename(
+                "openSUSE-Tumbleweed-DVD-x86_64-Snapshot20261103-Media.iso"
+            ),
+            "20261103",
+        )
+        _ok("Snapshot date extracted as the version")
+
+    def test_newer_snapshot_sorts_above_older(self) -> None:
+        self.assertGreater(
+            compare_versions("20261103", "20260101"),
+            0,
+        )
+        self.assertEqual(compare_versions("20261103", "20261103"), 0)
+        _ok("A newer snapshot remains an update, an identical one is current")
+
+    def test_snapshot_digits_are_not_misread_elsewhere(self) -> None:
+        """Only whole SnapshotYYYYMMDD tokens count: a versionless name keeps
+        its old behavior."""
+        self.assertEqual(
+            extract_version_from_filename("openSUSE-Tumbleweed-DVD-x86_64-Current.iso"),
+            "",
+        )
+        _ok("Mutable alias still yields no version")
 
 
 class TestExpandUrl(unittest.TestCase):
