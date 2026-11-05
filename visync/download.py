@@ -500,6 +500,31 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
         if not iso_html:
             return fail(f"could not fetch release directory {iso_dir_url}")
 
+        # Optional newest-artifact selection, off by default. Zorin keeps every
+        # artifact of the major release in one directory — the base image,
+        # -rN maintenance rebuilds, point releases, betas, sibling editions —
+        # and a directory listing's order is not version order, so resolving
+        # first-match there would depend on how upstream happens to sort.
+        # Selection is the greatest (parsed version, filename) pair: version
+        # aware, and deterministic under a shuffled listing. Other providers
+        # (Ubuntu, Mint, CachyOS, Parrot) do not set newest_match and keep
+        # first-match behavior unchanged.
+        if settings.get("newest_match"):
+            candidates = [
+                f
+                for f in (
+                    _safe_filename(m.group(1)) for m in re.finditer(iso_regex, iso_html)
+                )
+                if f
+            ]
+            if not candidates:
+                return fail(f"iso_regex matched nothing in {iso_dir_url} (upstream layout?)")
+            filename = max(
+                candidates,
+                key=lambda f: (parse_version(extract_version_from_filename(f)) or (), f),
+            )
+            return filename, f"{iso_dir_url}{filename}"
+
         match = re.search(iso_regex, iso_html)
         if match:
             filename = _safe_filename(match.group(1))

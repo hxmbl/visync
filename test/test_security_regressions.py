@@ -1872,6 +1872,71 @@ class TestCleanupDeletionSafety(unittest.TestCase):
             self.assertFalse(old.exists())
             self.assertTrue(new.exists())
 
+    def test_cleanup_removes_older_zorin_revision_build(self):
+        """Zorin ISOs of the same version but different -rN revision share the
+        base volume ID (e.g. "Zorin OS 18.1 Core 64bit"), so cleanup groups
+        them and removes deprecated -rN rebuilds."""
+        from visync.download import _cleanup_old_versions
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            drive = self._drive(tmpdir)
+            old_r2 = _make_iso(
+                drive / "Zorin-OS-18.1-Core-64-bit-r2.iso",
+                "Zorin OS 18.1 Core 64bit",
+            )
+            new = _make_iso(
+                drive / "Zorin-OS-18.1-Core-64-bit-r3.iso",
+                "Zorin OS 18.1 Core 64bit",
+            )
+            _cleanup_old_versions(new, drive)
+            self.assertFalse(old_r2.exists())
+            self.assertTrue(new.exists())
+
+    def test_cleanup_removes_older_zorin_pt_to_pt_release(self):
+        """When upstream moves from a base release (18 Core) to a point release
+        (18.1), ISOs with different volume IDs must still group by the
+        recognized distro name and remove the deprecated base release."""
+        from visync.download import _cleanup_old_versions
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            drive = self._drive(tmpdir)
+            old_core = _make_iso(
+                drive / "Zorin-OS-18-Core-64-bit-r3.iso",
+                "Zorin OS 18 Core 64bit",
+            )
+            new = _make_iso(
+                drive / "Zorin-OS-18.1-Core-64-bit.iso",
+                "Zorin OS 18.1 Core 64bit",
+            )
+            _cleanup_old_versions(new, drive)
+            self.assertFalse(old_core.exists())
+            self.assertTrue(new.exists())
+
+    def test_cleanup_preserves_different_zorin_editions(self):
+        """Core, Lite, and Education are distinct variants. Cleanup must not
+        delete other editions even when Core is an update."""
+        from visync.download import _cleanup_old_versions
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            drive = self._drive(tmpdir)
+            lite = _make_iso(
+                drive / "Zorin-OS-18.1-Lite-64-bit.iso",
+                "Zorin OS 18.1 Lite 64bit",
+            )
+            edu = _make_iso(
+                drive / "Zorin-OS-18.1-Education-64-bit.iso",
+                "Zorin OS 18.1 Education 64bit",
+            )
+            new_core = _make_iso(
+                drive / "Zorin-OS-18.2-Core-64-bit.iso",
+                "Zorin OS 18.2 Core 64bit",
+            )
+            _cleanup_old_versions(new_core, drive)
+            self.assertTrue(lite.exists())
+            self.assertTrue(edu.exists())
+            self.assertTrue(new_core.exists())
+            print(f"Cleanup preserved Lite and Education when updating Core: {new_core.name}")
+
     def test_cleanup_never_touches_unidentified_isos(self):
         from visync.download import _cleanup_old_versions
 
@@ -1973,6 +2038,10 @@ class TestConfigNameConsistency(unittest.TestCase):
         "OpenSUSETumbleweedDVD": (
             "",
             "openSUSE-Tumbleweed-DVD-x86_64-20260201.iso",
+        ),
+        "ZorinOS": (
+            "Zorin OS 18.1 Core 64bit",
+            "Zorin-OS-18.1-Core-64-bit.iso",
         ),
     }
 

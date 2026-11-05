@@ -62,6 +62,11 @@ systemrescue = "SystemRescue"
 rescuezilla = "Rescuezilla"
 tails = "Tails"
 tiny11 = "Tiny11"
+# Zorin ISOs write "Zorin OS 18.1 Core 64bit" to the volume ID and prefix their
+# filenames with "Zorin-OS-", so the "zorin" keyword hits both. There is no
+# Ubuntu fork override here: Zorin's volume ID contains no "ubuntu" token, so
+# base_distros cannot see it at all.
+zorin = "Zorin OS"
 
 # Specific desktop flavor/version overrides so regex doesn't grab them poorly.
 # These must mirror the [distros.*] clean_name exactly: install/remove match an
@@ -353,6 +358,35 @@ iso_regex = 'href="./?(openSUSE-Tumbleweed-DVD-x86_64-Snapshot[0-9]{8}-Media\.is
 # optional ./ between the quote and the filename.
 newest_match = true
 checksum_url = "{base_url}{iso_name}.sha256"
+checksum_format = "sha256sums"
+checksum_algo = "sha256"
+
+[distros.ZorinOS]
+clean_name = "Zorin OS"
+keyword = "zorin"
+strategy = "ubuntu_nested"
+# Zorin's mirrors are listed at zorin.com/os/mirrors; the free Core edition is
+# the one in scope. distro.ibiblio.org is the first official mirror and serves
+# plain bot-free directory indexes. Its root holds one numeric directory per
+# major release (15/, 16/, 17/, 18/) plus non-numeric dirs the version regex
+# cannot match, so "newest major" falls out of the standard sort.
+base_url = "https://distro.ibiblio.org/zorinos/"
+version_regex = 'href="([0-9\.]+)/"'
+# A release directory keeps EVERY artifact of that major release: the base
+# image, -rN maintenance rebuilds (Zorin-OS-18-Core-64-bit-r3.iso, re-spun with
+# no version change), beta images, and sibling editions (Lite, Education). The
+# first-match rule of ubuntu_nested would resolve to whichever came first in
+# the listing, so Core 64-bit is matched explicitly — the version must lead the
+# edition token, which structurally excludes "…-Core-Beta-64-bit…" — and
+# newest_match picks the greatest (version, revision) pair.
+iso_regex = 'href="(Zorin-OS-[0-9]+(?:\.[0-9]+)?-Core-64-bit(?:-r[0-9]+)?\.iso)"'
+newest_match = true
+# The sums file sits in the major-release directory, not in a per-point-release
+# one (releases.ubuntu.com-style 18.1/ does not exist), and it lists every
+# artifact including revisions and betas. {major} is the major release number
+# parsed from the ISO filename, since it stays valid whether the newest artifact
+# is "18-Core…-rN" (parsed version 18.0.N) or "18.1-Core…" (18.1).
+checksum_url = "{base_url}{major}/SHA256SUMS.txt"
 checksum_format = "sha256sums"
 checksum_algo = "sha256"
 
