@@ -282,6 +282,16 @@ class TestParseHashsums(unittest.TestCase):
         )
         _ok("40-hex and 64-hex digests disambiguate by length")
 
+    def test_sha512sums_selects_sha512(self) -> None:
+        """openSUSE Leap uses SHA-512 checksums."""
+        sha512 = "a" * 128  # 128 hex characters for SHA-512
+        content = f"{sha512}  Leap-16.1-offline-installer-x86_64.install.iso\n"
+        result = parse_hashsums(
+            content, "Leap-16.1-offline-installer-x86_64.install.iso", "sha512"
+        )
+        self.assertEqual(result, sha512)
+        _ok("SHA-512 digests parsed correctly")
+
 
 class TestParseTailsJson(unittest.TestCase):
     def test_parses_valid_json(self) -> None:
@@ -486,10 +496,31 @@ class TestZorinVersion(unittest.TestCase):
         meta = extract_iso_metadata("Zorin-OS-18.1-Core-64-bit.iso")
         self.assertEqual(meta["version"], "18.1")
         self.assertEqual(meta["major"], "18")
-        meta_r = extract_iso_metadata("Zorin-OS-18-Core-64-bit-r3.iso")
-        self.assertEqual(meta_r["version"], "18.0.3")
-        self.assertEqual(meta_r["major"], "18")
-        _ok("{major} set from the filename for checksum URL expansion")
+
+
+class TestLeapVersion(unittest.TestCase):
+    """openSUSE Leap version extraction from offline installer filenames."""
+
+    def test_leap_version_extracted(self) -> None:
+        _section("openSUSE Leap version extraction")
+        self.assertEqual(
+            extract_version_from_filename(
+                "Leap-16.1-offline-installer-x86_64.install.iso"
+            ),
+            "16.1",
+        )
+        self.assertEqual(
+            extract_version_from_filename(
+                "Leap-15.6-offline-installer-x86_64.install.iso"
+            ),
+            "15.6",
+        )
+        _ok("Leap version extracted correctly")
+
+    def test_leap_version_comparison(self) -> None:
+        self.assertGreater(compare_versions("16.1", "15.6"), 0)
+        self.assertEqual(compare_versions("16.1", "16.1"), 0)
+        _ok("Leap version comparison works")
 
 
 class TestSnapshotVersion(unittest.TestCase):

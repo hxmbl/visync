@@ -2041,6 +2041,10 @@ class TestConfigNameConsistency(unittest.TestCase):
             "",
             "openSUSE-Tumbleweed-DVD-x86_64-20260201.iso",
         ),
+        "OpenSUSELeap": (
+            "openSUSE Leap 16.1",
+            "Leap-16.1-offline-installer-x86_64.install.iso",
+        ),
         "ZorinOS": (
             "Zorin OS 18.1 Core 64bit",
             "Zorin-OS-18.1-Core-64-bit.iso",

@@ -376,6 +376,30 @@ class TestProcessScrapingStrategy(unittest.TestCase):
 
     @patch("visync.download.ping_mirror", return_value=True)
     @patch("visync.download.fetch_html")
+    def test_fedora_nested_with_version_filter(
+        self, mock_fetch_html: MagicMock, mock_ping: MagicMock
+    ):
+        """fedora_nested with version_filter excludes legacy versions."""
+        _section("Strategy: fedora_nested — version_filter")
+        mock_fetch_html.side_effect = [
+            '<a href="42.3/">42.3/</a><a href="15.6/">15.6/</a><a href="16.1/">16.1/</a>',
+            '<a href="Leap-16.1-offline-installer-x86_64.install.iso">iso</a>',
+        ]
+        settings = {
+            "strategy": "fedora_nested",
+            "base_url": "https://example.com/leap/",
+            "version_regex": 'href="([0-9\\.]+)/"',
+            "version_filter": "1[5-9]\\.[0-9]+",
+            "variant_path": "offline",
+            "iso_regex": 'href="(Leap-[0-9]+\\.[0-9]+-offline-installer-x86_64\\.install\\.iso)"',
+        }
+        name, url = process_scraping_strategy("openSUSE Leap", settings)
+        self.assertEqual(name, "Leap-16.1-offline-installer-x86_64.install.iso")
+        self.assertIn("16.1/offline/", url)
+        _ok(f"Resolved to Leap 16.1, excluded 42.3: {name}")
+
+    @patch("visync.download.ping_mirror", return_value=True)
+    @patch("visync.download.fetch_html")
     def test_ubuntu_nested_found(
         self, mock_fetch_html: MagicMock, mock_ping: MagicMock
     ):

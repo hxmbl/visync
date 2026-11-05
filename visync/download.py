@@ -445,11 +445,24 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
         if not versions:
             return fail(f"no version directories matched at {base_url}")
 
+        # Optional release-family filter, applied before sorting so we pick the
+        # newest *matching* release rather than the newest overall.
+        filter_regex = str(settings.get("version_filter") or "")
+        if filter_regex:
+            versions = [v for v in versions if re.fullmatch(filter_regex, v)]
+            if not versions:
+                return fail(
+                    f"no version directories matched version_filter "
+                    f"{filter_regex!r} at {base_url}"
+                )
+
         versions.sort(key=lambda x: parse_version(x) or ())
         latest_version = versions[-1].rstrip("/")
 
         variant_path = str(settings.get("variant_path") or "Workstation/x86_64/iso")
-        iso_dir_url = f"{base_url}{latest_version}/{variant_path}/"
+        # Construct the ISO directory URL. If variant_path doesn't end with a slash,
+        # add one to ensure proper path joining.
+        iso_dir_url = f"{base_url}{latest_version}/{variant_path.rstrip('/')}/"
         iso_html = fetch_html(iso_dir_url)
         if not iso_html:
             return fail(f"could not fetch ISO directory {iso_dir_url}")
