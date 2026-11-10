@@ -2656,12 +2656,14 @@ class TestStrm501CachedHashBypass(unittest.TestCase):
             meta_dir.mkdir(parents=True)
             meta_file = meta_dir / "test.iso.json"
             meta_file.write_text(
-                json.dumps({
-                    "sha256": "aa" * 32,
-                    "size": 1000,
-                    "variant_stem": "x",
-                    "version": "1",
-                })
+                json.dumps(
+                    {
+                        "sha256": "aa" * 32,
+                        "size": 1000,
+                        "variant_stem": "x",
+                        "version": "1",
+                    }
+                )
             )
             # Create an ISO file with the same size as the cached metadata
             iso.write_bytes(b"x" * 1000)
@@ -2674,14 +2676,16 @@ class TestStrm501CachedHashBypass(unittest.TestCase):
         self.assertEqual(
             call_kwargs.get("precomputed_hash"),
             "",
-            "precomputed_hash must be empty to force re-hashing from disk"
+            "precomputed_hash must be empty to force re-hashing from disk",
         )
 
     @patch("visync.verify.compute_iso_hash")
     @patch("visync.verify._fetch")
-    def test_verify_iso_uses_precomputed_hash_only_for_sha256(self, mock_fetch, mock_hash):
+    def test_verify_iso_uses_precomputed_hash_only_for_sha256(
+        self, mock_fetch, mock_hash
+    ):
         """verify_iso must use precomputed_hash when algo is sha256 and it's provided.
-        
+
         This tests the LEGITIMATE use case: when download_iso computes a hash
         and passes it to avoid re-reading the same file twice.
         """
@@ -2741,7 +2745,7 @@ class TestStrm501CachedHashBypass(unittest.TestCase):
 
         This is the core of STRM-501: if we reused a cached hash based on
         size match, a single byte flip would go undetected.
-        
+
         Scenario:
         - File was downloaded with hash "aa"*32 and size 1000
         - File gets corrupted (same size 1000, but now hashes to "bb"*32)
@@ -2749,11 +2753,11 @@ class TestStrm501CachedHashBypass(unittest.TestCase):
         - Before fix: cached hash "aa"*32 would be reused, match expected "aa"*32 -> VERIFIED (WRONG!)
         - After fix: file is re-hashed to "bb"*32, compared to expected "aa"*32 -> MISMATCH (CORRECT!)
         """
-        from visync.verify import run_directory_verify, VerifyStatus
+        from visync.verify import VerifyStatus, run_directory_verify
 
         cached_hash = "aa" * 32  # Hash when file was originally downloaded
-        actual_hash = "bb" * 32   # Hash after corruption
-        expected_hash = "aa" * 32 # What upstream says the hash should be
+        actual_hash = "bb" * 32  # Hash after corruption
+        expected_hash = "aa" * 32  # What upstream says the hash should be
         file_size = 1000
 
         # Mock distro identification
@@ -2775,12 +2779,14 @@ class TestStrm501CachedHashBypass(unittest.TestCase):
             meta_dir.mkdir(parents=True)
             meta_file = meta_dir / "test.iso.json"
             meta_file.write_text(
-                json.dumps({
-                    "sha256": cached_hash,  # This was correct when downloaded
-                    "size": file_size,
-                    "variant_stem": "x",
-                    "version": "1",
-                })
+                json.dumps(
+                    {
+                        "sha256": cached_hash,  # This was correct when downloaded
+                        "size": file_size,
+                        "variant_stem": "x",
+                        "version": "1",
+                    }
+                )
             )
 
             config = {
@@ -2802,5 +2808,5 @@ class TestStrm501CachedHashBypass(unittest.TestCase):
         self.assertEqual(
             status,
             VerifyStatus.MISMATCH,
-            "Corrupted file (same size) must be detected as MISMATCH, not VERIFIED"
+            "Corrupted file (same size) must be detected as MISMATCH, not VERIFIED",
         )

@@ -23,7 +23,6 @@ from visync.finder import (
     get_iso_volume_id,
     identify_distro,
     keyword_hit,
-    load_all_metadata,
 )
 from visync.net import install_safe_opener, require_https
 from visync.output import warn
@@ -524,7 +523,7 @@ def verify_iso(
     may safely delete the file. Raises ChecksumUnavailable when the expected
     hash cannot be obtained or evaluated (network failure, 404, ISO absent
     from the sums file, unknown format); callers must keep the file then.
-    
+
     If *precomputed_hash* is supplied and the requested algo is sha256, it is
     compared directly instead of re-reading the ISO from disk. This is safe
     ONLY when the hash was computed in the current session from the actual
@@ -754,7 +753,7 @@ def run_directory_verify(
 
     The third element is always a VerifyStatus; verify_from_config's tri-state
     return is folded into it here, which is the one place that knows about both.
-    
+
     Note: Explicit verification always re-hashes the ISO from disk. The
     precomputed_hash parameter is NOT used here to avoid the security issue
     described in STRM-501 where same-size corruption could bypass verification.
@@ -790,10 +789,10 @@ def verify_from_config(
     """Verify a single ISO using its distro's checksum configuration.
 
     Returns True/False on success, None if no checksum config is available.
-    
+
     If *precomputed_hash* is provided and non-empty, it is used as the local
     hash instead of computing it from the file. This is safe ONLY when the
-    hash was computed in the current session from the actual file (e.g., 
+    hash was computed in the current session from the actual file (e.g.,
     right after a download). For explicit verification (run_directory_verify),
     pass an empty string to force re-hashing from disk — see STRM-501.
 
