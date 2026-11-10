@@ -1062,6 +1062,8 @@ def verify(
     if unavailable:
         summary += f", {unavailable} unverified (source unreachable)"
     summary += f", {skipped} skipped (no config)."
+    if verified > 0:
+        summary += " (all checksums computed from disk)"
     output_info(summary)
     if failed or unavailable:
         raise typer.Exit(1)

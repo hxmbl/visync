@@ -2612,3 +2612,195 @@ class TestAutodetectReadsStateOnce(unittest.TestCase):
     def test_already_registered_is_still_skipped(self):
         _result, _reads, mark = self._run(["archlinux-2026.iso"], ["ArchLinux"])
         self.assertEqual(mark.call_count, 0)
+
+
+# ── STRM-501: cached hash must not bypass explicit verification ──────────────
+
+
+class TestStrm501CachedHashBypass(unittest.TestCase):
+    """STRM-501: verify must re-hash the file, not trust cached metadata.
+
+    The bug: run_directory_verify passed _cached_hash_for(iso_path, cached) as
+    precomputed_hash to verify_from_config. When the file size matched the
+    cached metadata, the cached hash was used instead of re-reading the file.
+    This allowed same-size corruption to appear verified.
+    """
+
+    @patch("visync.verify.verify_from_config")
+    @patch("visync.verify.build_iso_distro_map")
+    def test_run_directory_verify_passes_empty_precomputed_hash(
+        self, mock_map: MagicMock, mock_verify: MagicMock
+    ) -> None:
+        """run_directory_verify must pass precomputed_hash='' to force re-hashing."""
+        from visync.verify import run_directory_verify
+
+        iso = Path("/tmp/test.iso")
+        mock_map.return_value = {str(iso): (iso, "Arch Linux")}
+        mock_verify.return_value = True
+
+        config = {
+            "checksums": {"enabled": True},
+            "distros": {
+                "ArchLinux": {
+                    "clean_name": "Arch Linux",
+                    "checksum_url": "{base_url}sha256sums.txt",
+                    "base_url": "https://example.com/",
+                }
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            drive = Path(tmpdir)
+            # Create a metadata file with a cached hash
+            meta_dir = drive / ".visync" / "metadata"
+            meta_dir.mkdir(parents=True)
+            meta_file = meta_dir / "test.iso.json"
+            meta_file.write_text(
+                json.dumps({
+                    "sha256": "aa" * 32,
+                    "size": 1000,
+                    "variant_stem": "x",
+                    "version": "1",
+                })
+            )
+            # Create an ISO file with the same size as the cached metadata
+            iso.write_bytes(b"x" * 1000)
+
+            run_directory_verify(drive, config)
+
+        # Verify that verify_from_config was called with precomputed_hash=''
+        mock_verify.assert_called_once()
+        call_kwargs = mock_verify.call_args[1]
+        self.assertEqual(
+            call_kwargs.get("precomputed_hash"),
+            "",
+            "precomputed_hash must be empty to force re-hashing from disk"
+        )
+
+    @patch("visync.verify.compute_iso_hash")
+    @patch("visync.verify._fetch")
+    def test_verify_iso_uses_precomputed_hash_only_for_sha256(self, mock_fetch, mock_hash):
+        """verify_iso must use precomputed_hash when algo is sha256 and it's provided.
+        
+        This tests the LEGITIMATE use case: when download_iso computes a hash
+        and passes it to avoid re-reading the same file twice.
+        """
+        from visync.verify import verify_iso
+
+        mock_fetch.return_value = "0" * 64 + "  test.iso\n"
+        mock_hash.return_value = "1" * 64  # Different from what would be computed
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            iso = Path(tmpdir) / "test.iso"
+            iso.write_bytes(b"x" * 1000)
+
+            # When precomputed_hash is provided for sha256, it should be used
+            result = verify_iso(
+                iso,
+                "https://example.com/SHA256SUMS",
+                algo="sha256",
+                checksum_format="sha256sums",
+                precomputed_hash="0" * 64,
+            )
+
+        mock_hash.assert_not_called()
+        self.assertTrue(result)
+
+    @patch("visync.verify.compute_iso_hash")
+    @patch("visync.verify._fetch")
+    def test_verify_iso_computes_hash_when_no_precomputed(self, mock_fetch, mock_hash):
+        """verify_iso must compute hash from disk when precomputed_hash is empty."""
+        from visync.verify import verify_iso
+
+        mock_fetch.return_value = "aa" * 32 + "  test.iso\n"
+        mock_hash.return_value = "aa" * 32
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            iso = Path(tmpdir) / "test.iso"
+            iso.write_bytes(b"x" * 1000)
+
+            result = verify_iso(
+                iso,
+                "https://example.com/SHA256SUMS",
+                algo="sha256",
+                checksum_format="sha256sums",
+                precomputed_hash="",  # Empty - must compute from disk
+            )
+
+        mock_hash.assert_called_once_with(iso, "sha256")
+        self.assertTrue(result)
+
+    @patch("visync.verify.compute_iso_hash")
+    @patch("visync.verify._fetch")
+    @patch("visync.verify.get_iso_volume_id")
+    @patch("visync.verify.identify_distro")
+    def test_verify_iso_detects_corruption_even_with_cached_size_match(
+        self, mock_identify, mock_vid, mock_fetch, mock_hash
+    ):
+        """Corruption that preserves file size must still be detected.
+
+        This is the core of STRM-501: if we reused a cached hash based on
+        size match, a single byte flip would go undetected.
+        
+        Scenario:
+        - File was downloaded with hash "aa"*32 and size 1000
+        - File gets corrupted (same size 1000, but now hashes to "bb"*32)
+        - Upstream checksum file still has the correct hash "aa"*32
+        - Before fix: cached hash "aa"*32 would be reused, match expected "aa"*32 -> VERIFIED (WRONG!)
+        - After fix: file is re-hashed to "bb"*32, compared to expected "aa"*32 -> MISMATCH (CORRECT!)
+        """
+        from visync.verify import run_directory_verify, VerifyStatus
+
+        cached_hash = "aa" * 32  # Hash when file was originally downloaded
+        actual_hash = "bb" * 32   # Hash after corruption
+        expected_hash = "aa" * 32 # What upstream says the hash should be
+        file_size = 1000
+
+        # Mock distro identification
+        mock_identify.return_value = "Arch Linux"
+        mock_vid.return_value = "ARCH_2026"
+
+        # The checksum file contains the expected (correct) hash
+        mock_fetch.return_value = expected_hash + "  test.iso\n"
+        # When we hash the corrupted file, we get the actual (wrong) hash
+        mock_hash.return_value = actual_hash
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            drive = Path(tmpdir)
+            iso = drive / "test.iso"
+            iso.write_bytes(b"x" * file_size)  # Same size as cached
+
+            # Create metadata with the OLD hash (from when file was downloaded)
+            meta_dir = drive / ".visync" / "metadata"
+            meta_dir.mkdir(parents=True)
+            meta_file = meta_dir / "test.iso.json"
+            meta_file.write_text(
+                json.dumps({
+                    "sha256": cached_hash,  # This was correct when downloaded
+                    "size": file_size,
+                    "variant_stem": "x",
+                    "version": "1",
+                })
+            )
+
+            config = {
+                "checksums": {"enabled": True},
+                "distros": {
+                    "ArchLinux": {
+                        "clean_name": "Arch Linux",
+                        "checksum_url": "{base_url}sha256sums.txt",
+                        "base_url": "https://example.com/",
+                    }
+                },
+            }
+
+            results = run_directory_verify(drive, config)
+
+        # After fix: should detect mismatch because actual_hash != expected_hash
+        self.assertEqual(len(results), 1)
+        _iso_path, _distro, status = results[0]
+        self.assertEqual(
+            status,
+            VerifyStatus.MISMATCH,
+            "Corrupted file (same size) must be detected as MISMATCH, not VERIFIED"
+        )

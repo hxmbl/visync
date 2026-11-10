@@ -524,9 +524,12 @@ def verify_iso(
     may safely delete the file. Raises ChecksumUnavailable when the expected
     hash cannot be obtained or evaluated (network failure, 404, ISO absent
     from the sums file, unknown format); callers must keep the file then.
+    
     If *precomputed_hash* is supplied and the requested algo is sha256, it is
-    compared directly instead of re-reading the ISO from disk — avoids the
-    duplicate full-file hash right after a download.
+    compared directly instead of re-reading the ISO from disk. This is safe
+    ONLY when the hash was computed in the current session from the actual
+    file (e.g., right after a download). Do NOT use cached/persisted hashes
+    for explicit verification — see STRM-501.
     """
     iso_name = iso_path.name
 
@@ -751,11 +754,14 @@ def run_directory_verify(
 
     The third element is always a VerifyStatus; verify_from_config's tri-state
     return is folded into it here, which is the one place that knows about both.
+    
+    Note: Explicit verification always re-hashes the ISO from disk. The
+    precomputed_hash parameter is NOT used here to avoid the security issue
+    described in STRM-501 where same-size corruption could bypass verification.
     """
     distro_map = build_iso_distro_map(iso_dir)
     distro_configs = index_distro_configs(config)
     checksums_config = config.get("checksums", {})
-    cached = load_all_metadata(iso_dir)
     results: list[tuple[Path, str, VerifyStatus]] = []
     for iso_path, distro_name in distro_map.values():
         settings = resolve_distro_settings(distro_name, iso_path.name, distro_configs)
@@ -765,7 +771,7 @@ def run_directory_verify(
                     iso_path,
                     settings,
                     checksums_config,
-                    precomputed_hash=_cached_hash_for(iso_path, cached),
+                    precomputed_hash="",
                 )
             )
         except ChecksumUnavailable as e:
@@ -784,7 +790,12 @@ def verify_from_config(
     """Verify a single ISO using its distro's checksum configuration.
 
     Returns True/False on success, None if no checksum config is available.
-    If *precomputed_hash* is provided, skip re-hashing the file.
+    
+    If *precomputed_hash* is provided and non-empty, it is used as the local
+    hash instead of computing it from the file. This is safe ONLY when the
+    hash was computed in the current session from the actual file (e.g., 
+    right after a download). For explicit verification (run_directory_verify),
+    pass an empty string to force re-hashing from disk — see STRM-501.
 
     There is deliberately no distro-name parameter: the caller has already
     resolved the name into *distro_config*, and download_iso passed an empty
