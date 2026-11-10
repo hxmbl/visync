@@ -1682,9 +1682,10 @@ def sync_all_configured_distros(
     # dry run — that command promises to leave the drive untouched.
     if not dry_run:
         visync_watchdog(ventoy_root, allow_wipe=reset_visync)
-    # Schedule the clean sweep after successful downloads. A partial sync should
-    # preserve rollback images, so we only sweep if all placements succeed.
-    if clean and not dry_run:
+    if clean and dry_run:
+        # Reporting candidates is read-only and lets --dry-run preview cleanup.
+        _sweep_old_versions(ventoy_root, clean=False)
+    elif clean:
         success("Cleaning old versions after successful sync")
 
     config_download_dir = iso_settings.get("download_dir", "").strip()
@@ -1773,6 +1774,7 @@ def sync_all_configured_distros(
     checksums_config = config.get("checksums", {})
 
     downloaded: list[str] = []
+    verified_installs: list[Path] = []
 
     if dry_run:
         if pending_downloads:
@@ -1848,9 +1850,6 @@ def sync_all_configured_distros(
                     )
                     continue
                 success(f"Moved to Ventoy drive: {latest_filename}")
-                # The staging copy is no longer needed; clean older staging
-                # builds only after placement has succeeded.
-                _cleanup_old_versions(dest, verified=verified)
                 try:
                     dest.unlink(missing_ok=True)
                 except OSError as e:
@@ -1862,17 +1861,14 @@ def sync_all_configured_distros(
             # Metadata is committed only after the image is in its final place,
             # so a failed placement can never describe a file that is not there.
             _commit_iso_metadata(ventoy_root, drive_dest, outcome)
-            if clean:
-                _cleanup_old_versions(drive_dest, ventoy_root, verified=verified)
+            if verified:
+                verified_installs.append(drive_dest)
 
-    # Perform the scheduled sweep only if all downloads/placements succeeded
-    # (at least one distro was successfully processed).
-    if clean and not dry_run:
-        # Track if we successfully processed at least one distro.
-        # Any distro that was checked and reachable counts as success,
-        # even if it was already current.
-        processed_count = len(distro_scrapers) - len(unreachable)
-        if processed_count > 0:
-            _sweep_old_versions(ventoy_root, clean=True)
+    # Do not prune rollback images until every selected distro has completed.
+    # Only a replacement verified during this run authorizes cleanup for its
+    # variant; an unverified download or an already-current result is not proof.
+    if clean and not dry_run and not unreachable:
+        for iso_path in verified_installs:
+            _cleanup_old_versions(iso_path, ventoy_root, verified=True)
 
     return download_target_dir, downloaded, unreachable

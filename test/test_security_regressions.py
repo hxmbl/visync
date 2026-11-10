@@ -92,7 +92,7 @@ class TestDryRunGatesClean(unittest.TestCase):
     @patch("visync.download.visync_watchdog")
     @patch("visync.download._check_distro")
     def test_sync_clean_without_dry_run_removes_old(self, mock_check, _wd):
-        """--clean (no dry-run) removes only the older version."""
+        """A current filename alone does not authorize deleting rollback ISOs."""
         mock_check.return_value = self._current("archlinux-2026.08.01-x86_64.iso")
         with tempfile.TemporaryDirectory() as tmpdir:
             drive = self._make_drive(tmpdir)
@@ -104,10 +104,7 @@ class TestDryRunGatesClean(unittest.TestCase):
                     drive_override=drive,
                     use_buffer=False,
                 )
-                # With the fix, clean sweep happens after successful placement.
-                # Even if we're just verifying an already-present ISO, successful
-                # placement of the new version triggers cleanup of old versions.
-            self.assertFalse((drive / "archlinux-2025.01.01-x86_64.iso").exists())
+            self.assertTrue((drive / "archlinux-2025.01.01-x86_64.iso").exists())
             self.assertTrue((drive / "archlinux-2026.08.01-x86_64.iso").exists())
 
     def test_sweep_keeps_higher_release_not_higher_build(self):
@@ -157,13 +154,7 @@ class TestDryRunGatesClean(unittest.TestCase):
     @patch("visync.download.visync_watchdog")
     @patch("visync.download._check_distro")
     def test_sync_clean_only_after_successful_download(self, mock_check, _wd):
-        """--clean should only delete old versions after successful placement.
-
-        This ensures that if a download or verification fails, old ISOs are
-        preserved as rollback images. The sweep runs only after all distros
-        were successfully checked and processed.
-        """
-        # Setup: old ISO exists, will check as current
+        """A sync with no verified replacement preserves old versions."""
         mock_check.return_value = self._current("archlinux-2026.08.01-x86_64.iso")
         with tempfile.TemporaryDirectory() as tmpdir:
             drive = self._make_drive(tmpdir)
@@ -175,9 +166,7 @@ class TestDryRunGatesClean(unittest.TestCase):
                     drive_override=drive,
                     use_buffer=False,
                 )
-            # The cleanup should have run after successful processing and removed
-            # the old version, since the new version is already present and successful.
-            self.assertFalse((drive / "archlinux-2025.01.01-x86_64.iso").exists())
+            self.assertTrue((drive / "archlinux-2025.01.01-x86_64.iso").exists())
             self.assertTrue((drive / "archlinux-2026.08.01-x86_64.iso").exists())
 
 

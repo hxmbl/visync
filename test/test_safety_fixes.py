@@ -322,8 +322,10 @@ class TestMetadataCommitOrder(unittest.TestCase):
                     "visync.download._place_on_drive",
                     side_effect=OSError(28, "No space left on device"),
                 ),
+                patch("visync.download._cleanup_old_versions") as cleanup,
             ):
                 _dir, downloaded, failures = sync_all_configured_distros(
+                    clean=True,
                     drive_override=drive,
                     only=["Fedora"],
                     use_buffer=True,
@@ -336,6 +338,7 @@ class TestMetadataCommitOrder(unittest.TestCase):
                 (drive / ".visync" / "metadata" / f"{filename}.json").exists(),
                 "no metadata may describe a file that never landed",
             )
+            cleanup.assert_not_called()
 
     def test_drive_cleanup_requires_clean_and_verified_replacement(self) -> None:
         filename = "Fedora-Workstation-Live-x86_64-44-1.2.iso"
@@ -364,7 +367,6 @@ class TestMetadataCommitOrder(unittest.TestCase):
 
                 with (
                     patch("visync.download.visync_watchdog"),
-                    patch("visync.download._sweep_old_versions"),
                     patch("visync.download.load_config", return_value=config),
                     patch("visync.download.download_iso", side_effect=fake_download),
                     patch(
@@ -389,6 +391,61 @@ class TestMetadataCommitOrder(unittest.TestCase):
                 self.assertEqual(cleanup.call_count, int(clean))
                 if clean:
                     self.assertTrue(cleanup.call_args.kwargs["verified"])
+
+    def test_partial_sync_failure_defers_cleanup_for_all_replacements(self) -> None:
+        filename = "Fedora-Workstation-Live-x86_64-44-1.2.iso"
+        config = {
+            "iso": {"download_dir": ""},
+            "checksums": {"enabled": True},
+            "distros": {
+                "Fedora": {"clean_name": "Fedora", "keyword": "fedora"},
+                "ArchLinux": {"clean_name": "Arch Linux", "keyword": "arch"},
+            },
+        }
+
+        def fake_check(entry_id, *_args):
+            if entry_id == "Fedora":
+                return DistroCheck(
+                    "Fedora",
+                    "Fedora",
+                    filename,
+                    SyncStatus.STALE,
+                    "https://example.com/fedora.iso",
+                )
+            return DistroCheck(
+                "ArchLinux", "Arch Linux", "", SyncStatus.UNREACHABLE, None
+            )
+
+        def fake_download(_url, dest, **kwargs):
+            dest.write_bytes(b"verified image")
+            kwargs["outcome"].update(
+                {
+                    "sha256": hashlib.sha256(b"verified image").hexdigest(),
+                    "verified": True,
+                    "version": "44",
+                    "variant_stem": "fedora",
+                }
+            )
+            return True
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            drive = Path(tmpdir)
+            with (
+                patch("visync.download.visync_watchdog"),
+                patch("visync.download.load_config", return_value=config),
+                patch("visync.download._check_distro", side_effect=fake_check),
+                patch("visync.download.download_iso", side_effect=fake_download),
+                patch("visync.download._cleanup_old_versions") as cleanup,
+            ):
+                _dir, downloaded, failures = sync_all_configured_distros(
+                    clean=True,
+                    drive_override=drive,
+                    use_buffer=False,
+                )
+
+        self.assertEqual(downloaded, [filename])
+        self.assertTrue(failures)
+        cleanup.assert_not_called()
 
 
 class TestInterruptMessage(unittest.TestCase):
