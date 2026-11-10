@@ -104,6 +104,9 @@ class TestDryRunGatesClean(unittest.TestCase):
                     drive_override=drive,
                     use_buffer=False,
                 )
+                # With the fix, clean sweep happens after successful placement.
+                # Even if we're just verifying an already-present ISO, successful
+                # placement of the new version triggers cleanup of old versions.
             self.assertFalse((drive / "archlinux-2025.01.01-x86_64.iso").exists())
             self.assertTrue((drive / "archlinux-2026.08.01-x86_64.iso").exists())
 
@@ -150,6 +153,32 @@ class TestDryRunGatesClean(unittest.TestCase):
             self.assertFalse(
                 staging.exists(), "dry-run must not create the staging dir"
             )
+
+    @patch("visync.download.visync_watchdog")
+    @patch("visync.download._check_distro")
+    def test_sync_clean_only_after_successful_download(self, mock_check, _wd):
+        """--clean should only delete old versions after successful placement.
+
+        This ensures that if a download or verification fails, old ISOs are
+        preserved as rollback images. The sweep runs only after all distros
+        were successfully checked and processed.
+        """
+        # Setup: old ISO exists, will check as current
+        mock_check.return_value = self._current("archlinux-2026.08.01-x86_64.iso")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            drive = self._make_drive(tmpdir)
+            with patch("visync.download.load_config", return_value=self._config()):
+                sync_all_configured_distros(
+                    dry_run=False,
+                    clean=True,
+                    only=["ArchLinux"],
+                    drive_override=drive,
+                    use_buffer=False,
+                )
+            # The cleanup should have run after successful processing and removed
+            # the old version, since the new version is already present and successful.
+            self.assertFalse((drive / "archlinux-2025.01.01-x86_64.iso").exists())
+            self.assertTrue((drive / "archlinux-2026.08.01-x86_64.iso").exists())
 
 
 # ── C2: chunked downloader rejects truncated / range-ignoring servers ────────

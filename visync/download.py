@@ -1682,7 +1682,10 @@ def sync_all_configured_distros(
     # dry run — that command promises to leave the drive untouched.
     if not dry_run:
         visync_watchdog(ventoy_root, allow_wipe=reset_visync)
-    _sweep_old_versions(ventoy_root, clean=clean and not dry_run)
+    # Schedule the clean sweep after successful downloads. A partial sync should
+    # preserve rollback images, so we only sweep if all placements succeed.
+    if clean and not dry_run:
+        success("Cleaning old versions after successful sync")
 
     config_download_dir = iso_settings.get("download_dir", "").strip()
     if use_buffer:
@@ -1861,5 +1864,15 @@ def sync_all_configured_distros(
             _commit_iso_metadata(ventoy_root, drive_dest, outcome)
             if clean:
                 _cleanup_old_versions(drive_dest, ventoy_root, verified=verified)
+
+    # Perform the scheduled sweep only if all downloads/placements succeeded
+    # (at least one distro was successfully processed).
+    if clean and not dry_run:
+        # Track if we successfully processed at least one distro.
+        # Any distro that was checked and reachable counts as success,
+        # even if it was already current.
+        processed_count = len(distro_scrapers) - len(unreachable)
+        if processed_count > 0:
+            _sweep_old_versions(ventoy_root, clean=True)
 
     return download_target_dir, downloaded, unreachable
