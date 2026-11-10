@@ -2804,7 +2804,7 @@ class TestStrm501CachedHashBypass(unittest.TestCase):
 
         # After fix: should detect mismatch because actual_hash != expected_hash
         self.assertEqual(len(results), 1)
-        _iso_path, _distro, status = results[0]
+        _iso_path, _distro, status, _source = results[0]
         self.assertEqual(
             status,
             VerifyStatus.MISMATCH,

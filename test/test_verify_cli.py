@@ -188,7 +188,12 @@ class TestVerifyCommand(unittest.TestCase):
             fake_drive = Path(tmpdir)
             mock_drives.return_value = [fake_drive]
             mock_run.return_value = [
-                (fake_drive / "arch.iso", "Arch Linux", VerifyStatus.VERIFIED)
+                (
+                    fake_drive / "arch.iso",
+                    "Arch Linux",
+                    VerifyStatus.VERIFIED,
+                    "https://example.com/sha256sums.txt",
+                )
             ]
 
             result = self.runner.invoke(self.app, ["verify"])
@@ -204,7 +209,7 @@ class TestVerifyCommand(unittest.TestCase):
     ) -> None:
         mock_load.return_value = {"checksums": {"enabled": True}, "distros": {}}
         mock_run.return_value = [
-            (Path("/tmp/bad.iso"), "Arch Linux", VerifyStatus.MISMATCH)
+            (Path("/tmp/bad.iso"), "Arch Linux", VerifyStatus.MISMATCH, "")
         ]
 
         with tempfile.TemporaryDirectory() as tmpdir:

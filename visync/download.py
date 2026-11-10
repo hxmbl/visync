@@ -1,12 +1,14 @@
 """Scrape and synchronize distributions configured in config.toml."""
 
 import concurrent.futures
+import contextlib
 import hashlib
 import os
 import re
 import shutil
 import socket
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -46,6 +48,8 @@ from visync.output import (
 )
 from visync.verify import (
     compare_versions,
+    extract_arch_from_filename,
+    extract_build_version,
     extract_version_from_filename,
     parse_elementary_checksum,
     parse_version,
@@ -609,6 +613,7 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
         )
         if checksum_match:
             settings["resolved_checksum"] = checksum_match.group(1)
+            settings["resolved_checksum_source"] = channel_url
 
         # Verify the URL is reachable
         try:
@@ -640,9 +645,11 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
         # it before reading the guide so an unavailable checksum cannot silently
         # reuse an older image's digest.
         settings.pop("resolved_checksum", None)
+        settings.pop("resolved_checksum_source", None)
         checksum = _elementary_checksum_for(settings, filename)
         if checksum:
             settings["resolved_checksum"] = checksum
+            settings["resolved_checksum_source"] = "elementary installation guide"
         return filename, url
 
     if strategy == "content_disposition":
@@ -723,6 +730,7 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
                     break
         if checksum:
             settings["resolved_checksum"] = checksum
+            settings["resolved_checksum_source"] = url
         return iso_filename, iso_url
 
     # Strategy F: Tails JSON API — fetch latest version from releases.json
@@ -768,6 +776,7 @@ def process_scraping_strategy(name: str, settings: dict) -> tuple[str, str]:
                     r"[a-fA-F0-9]{64}", checksum
                 ):
                     settings["resolved_checksum"] = checksum.lower()
+                    settings["resolved_checksum_source"] = api_url
                 return iso_filename, url
         return fail(f"{api_url} has no {file_type} artifact for the latest release")
 
@@ -1032,8 +1041,15 @@ def download_iso(
     distro_config: dict | None = None,
     checksums_config: dict | None = None,
     no_verify: bool = False,
+    outcome: dict | None = None,
 ) -> bool:
     """Download an ISO file with streaming progress and optional metadata persistence.
+
+    *outcome*, when given, is filled with what the caller needs to commit
+    installation metadata after the file has been placed on the drive: the
+    local hash, whether an upstream digest matched, that digest and its
+    source, and the detected version/variant. Nothing is persisted here, so a
+    later placement failure cannot leave metadata for a file that never landed.
 
     Returns True on success, False on failure.
     """
@@ -1119,27 +1135,14 @@ def download_iso(
         part_path.unlink(missing_ok=True)
         return False
 
-    part_path.replace(dest_path)
-    if drive_root and dest_path.parent != drive_root:
-        success(f"Downloaded to staging: {dest_path.name}")
-    else:
-        success(f"Downloaded: {dest_path.name}")
-
     # Compute SHA-256 once — used for both verification and metadata
     sha256_hex = ""
+    evidence: dict = {}
+    verified = False
     spin_start(f"Hashing {dest_path.name}...")
     try:
-        try:
-            h = hashlib.sha256()
-            with dest_path.open("rb") as f:
-                while True:
-                    chunk = f.read(65536)
-                    if not chunk:
-                        break
-                    h.update(chunk)
-            sha256_hex = h.hexdigest()
-        except OSError:
-            pass
+        with contextlib.suppress(OSError):
+            sha256_hex = _sha256_file(part_path)
 
         # Auto-verify checksum if config is available
         if not no_verify and distro_config and checksums_config is not None:
@@ -1148,10 +1151,12 @@ def download_iso(
             spin_update(f"Verifying checksum for {dest_path.name}...")
             try:
                 result = verify_from_config(
-                    dest_path,
+                    part_path,
                     distro_config,
                     checksums_config,
                     precomputed_hash=sha256_hex,
+                    evidence=evidence,
+                    iso_filename=dest_path.name,
                 )
             except ChecksumUnavailable as e:
                 warn(f"Could not verify {dest_path.name} — {e}")
@@ -1159,46 +1164,73 @@ def download_iso(
                 result = None
             if result is False:
                 error(f"Checksum verification failed for {dest_path.name} — deleting")
-                dest_path.unlink(missing_ok=True)
+                part_path.unlink(missing_ok=True)
                 return False
             if result is True:
+                verified = True
                 success(f"Checksum verified: {dest_path.name}")
             else:
                 warn(f"No checksum config for {dest_path.name} — installed UNVERIFIED")
     finally:
         spin_stop()
 
-    _cleanup_old_versions(dest_path, drive_root)
+    if (
+        not verified
+        and drive_root is not None
+        and dest_path.parent == drive_root
+        and dest_path.exists()
+    ):
+        error(
+            f"Keeping existing {dest_path.name}: refusing to replace it "
+            "with an unverified download"
+        )
+        part_path.unlink(missing_ok=True)
+        return False
 
-    if drive_root and sha256_hex:
+    part_path.replace(dest_path)
+    if drive_root and dest_path.parent != drive_root:
+        success(f"Downloaded to staging: {dest_path.name}")
+    else:
+        success(f"Downloaded: {dest_path.name}")
+
+    if outcome is not None:
         volume_id = get_iso_volume_id(dest_path)
-        version = ""
-        if volume_id:
-            version = extract_version_from_filename(dest_path.name)
-        variant_stem = _variant_stem(volume_id) if volume_id else ""
         try:
             iso_size = dest_path.stat().st_size
         except OSError:
             iso_size = 0
-        write_iso_metadata(
-            drive_root=drive_root,
-            filename=dest_path.name,
-            variant_stem=variant_stem,
-            version=version,
-            sha256=sha256_hex,
-            size=iso_size,
+        outcome.update(
+            {
+                "sha256": sha256_hex,
+                "size": iso_size,
+                "verified": verified,
+                "version": (
+                    extract_version_from_filename(dest_path.name) if volume_id else ""
+                ),
+                "variant_stem": _variant_stem(volume_id) if volume_id else "",
+                "upstream_sha256": str(evidence.get("upstream_sha256") or ""),
+                "upstream_source": str(evidence.get("upstream_source") or ""),
+                "upstream_algo": str(evidence.get("upstream_algo") or ""),
+                "signature": str(evidence.get("signature") or ""),
+            }
         )
-        _debug(f"Metadata written for {dest_path.name}")
 
     return True
 
 
-def _cleanup_old_versions(new_iso: Path, drive_root: Path | None = None) -> None:
+def _cleanup_old_versions(
+    new_iso: Path, drive_root: Path | None = None, *, verified: bool = True
+) -> None:
     """Scan the target directory and delete older ISOs of the same distribution variant.
 
     Uses volume ID for the new file only, then uses filename-based matching
     to find candidates. Only reads volume IDs for filename-matched candidates
     to confirm they are the same distro+variant before deletion.
+
+    When *verified* is False the newer file was not checked against an upstream
+    digest, so older same-variant images are retained as rollbacks and reported
+    instead of deleted. An unverified replacement must never remove the last
+    image known to be good.
     """
     _debug(f"Cleanup check for {new_iso.name}")
     try:
@@ -1237,6 +1269,12 @@ def _cleanup_old_versions(new_iso: Path, drive_root: Path | None = None) -> None
                     old_stem = _filename_variant_key(iso_path.name)
 
                 if old_distro == new_distro and old_stem == new_stem:
+                    if not verified:
+                        warn(
+                            f"Keeping previous image {iso_path.name}: "
+                            f"{new_iso.name} is not verified against upstream"
+                        )
+                        continue
                     removed(f"Removing deprecated image: {iso_path.name}")
                     iso_path.unlink(missing_ok=True)
                     if drive_root:
@@ -1430,7 +1468,10 @@ def _check_distro(
             entry_id, clean_name, latest_filename, SyncStatus.CURRENT, None
         )
 
-    # Version-based comparison: find best local candidate and compare
+    # Version-based comparison: find best local candidate and compare.
+    # The build revision (not the display release) is what decides an update,
+    # and architecture is part of the candidate identity: an installed x86_64
+    # image must never stand in for a missing aarch64 one.
     remote_version = extract_version_from_filename(latest_filename)
     if not remote_version:
         reason = f"no version in upstream filename {latest_filename!r}"
@@ -1439,22 +1480,24 @@ def _check_distro(
 
     if not force:
         remote_key = _filename_variant_key(latest_filename)
+        remote_arch = extract_arch_from_filename(latest_filename)
         same_distro = [
             f
             for f in local_ventoy_files
             if extract_version_from_filename(f.name)
             and _filename_variant_key(f.name) == remote_key
+            and (not remote_arch or extract_arch_from_filename(f.name) == remote_arch)
         ]
         if same_distro:
+            remote_build = extract_build_version(latest_filename)
             best_local = max(
                 same_distro,
-                key=lambda f: (
-                    parse_version(extract_version_from_filename(f.name)) or (0,)
-                ),
+                key=lambda f: parse_version(extract_build_version(f.name)) or (0,),
             )
-            local_version = extract_version_from_filename(best_local.name)
-            comparison = compare_versions(remote_version, local_version)
+            local_build = extract_build_version(best_local.name)
+            comparison = compare_versions(remote_build, local_build)
             if comparison <= 0:
+                local_version = extract_version_from_filename(best_local.name)
                 success(
                     f"{clean_name} is up to date (local {local_version}, upstream {remote_version})"
                 )
@@ -1491,6 +1534,80 @@ def _copy_with_progress(src: Path, dst: Path, filename: str) -> None:
                 wf.write(chunk)
                 copied += len(chunk)
                 progress.update(task, completed=copied)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        while chunk := file.read(65536):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _place_on_drive(src: Path, drive_dest: Path, *, expected_sha256: str = "") -> None:
+    """Put *src* at *drive_dest* without ever exposing a partial ISO.
+
+    Same filesystem: rename swaps it in atomically. Different filesystem
+    (the staging-buffer path): copy into a unique temporary file beside the
+    destination, verify its size and hash, then atomically replace it. If the
+    copy or the replace fails, the temporary file is removed and any existing
+    same-named image is left untouched.
+    """
+    try:
+        src.rename(drive_dest)
+        return
+    except OSError:
+        pass
+
+    fd, tmp_name = tempfile.mkstemp(
+        dir=drive_dest.parent, prefix=f".{drive_dest.name}.", suffix=".part"
+    )
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    try:
+        info(f"Copying to Ventoy drive: {drive_dest.name}")
+        _copy_with_progress(src, tmp_path, drive_dest.name)
+        source_size = src.stat().st_size
+        copied_size = tmp_path.stat().st_size
+        if copied_size != source_size:
+            raise OSError(
+                f"copy verification failed: source {source_size}, dest {copied_size}"
+            )
+        source_hash = expected_sha256 or _sha256_file(src)
+        copied_hash = _sha256_file(tmp_path)
+        if copied_hash != source_hash:
+            raise OSError(
+                f"copy verification failed: source SHA-256 {source_hash}, "
+                f"destination SHA-256 {copied_hash}"
+            )
+        tmp_path.replace(drive_dest)
+    except BaseException:
+        Path(tmp_path).unlink(missing_ok=True)
+        raise
+
+
+def _commit_iso_metadata(drive_root: Path, iso_path: Path, outcome: dict) -> None:
+    """Write installation metadata for an ISO that is now in its final place."""
+    sha256 = str(outcome.get("sha256") or "")
+    if not sha256:
+        return
+    try:
+        iso_size = iso_path.stat().st_size
+    except OSError:
+        iso_size = int(outcome.get("size") or 0)
+    write_iso_metadata(
+        drive_root=drive_root,
+        filename=iso_path.name,
+        variant_stem=str(outcome.get("variant_stem") or ""),
+        version=str(outcome.get("version") or ""),
+        sha256=sha256,
+        size=iso_size,
+        upstream_sha256=str(outcome.get("upstream_sha256") or ""),
+        upstream_source=str(outcome.get("upstream_source") or ""),
+        upstream_algo=str(outcome.get("upstream_algo") or ""),
+        signature=str(outcome.get("signature") or ""),
+    )
+    _debug(f"Metadata written for {iso_path.name}")
 
 
 def _discard_partial(part_file: Path, label: str) -> None:
@@ -1669,6 +1786,7 @@ def sync_all_configured_distros(
             dest = download_target_dir / latest_filename
             part_file = dest.with_suffix(dest.suffix + ".part")
             distro_cfg = distro_scrapers.get(entry_id, {})
+            outcome: dict = {}
             try:
                 ok = download_iso(
                     download_url,
@@ -1677,6 +1795,7 @@ def sync_all_configured_distros(
                     distro_config=distro_cfg,
                     checksums_config=checksums_config,
                     no_verify=no_verify,
+                    outcome=outcome,
                 )
             except KeyboardInterrupt:
                 # Ctrl-C leaves the partial file behind otherwise. Every other
@@ -1700,48 +1819,47 @@ def sync_all_configured_distros(
                 part_file.unlink(missing_ok=True)
                 unreachable.append((latest_filename, "download or verification failed"))
                 continue
-            downloaded.append(latest_filename)
+            verified = bool(outcome.get("verified"))
             if dest.parent != ventoy_root:
                 drive_dest = ventoy_root / latest_filename
+                if not verified and drive_dest.exists():
+                    error(
+                        f"Keeping existing {latest_filename}: refusing to replace "
+                        "it with an unverified download"
+                    )
+                    dest.unlink(missing_ok=True)
+                    unreachable.append(
+                        (latest_filename, "unverified replacement refused")
+                    )
+                    continue
                 try:
-                    try:
-                        dest.rename(drive_dest)
-                        success(f"Moved to Ventoy drive: {latest_filename}")
-                    except OSError:
-                        info(f"Copying to Ventoy drive: {latest_filename}")
-                        _copy_with_progress(dest, drive_dest, latest_filename)
-                        if drive_dest.stat().st_size != dest.stat().st_size:
-                            error(
-                                f"Copy verification failed for {latest_filename} — "
-                                f"source {dest.stat().st_size}, dest {drive_dest.stat().st_size}"
-                            )
-                            drive_dest.unlink(missing_ok=True)
-                            unreachable.append(
-                                (latest_filename, "copy to drive failed size check")
-                            )
-                            continue
-                        success(f"Copied to Ventoy drive: {latest_filename}")
+                    _place_on_drive(
+                        dest,
+                        drive_dest,
+                        expected_sha256=str(outcome.get("sha256") or ""),
+                    )
                 except OSError as e:
                     error(f"Failed placing {latest_filename} on drive: {e}")
-                    try:
-                        drive_dest.unlink(missing_ok=True)
-                    except OSError as unlink_err:
-                        if unlink_err.errno == 30:
-                            warn(
-                                f"Drive became read-only (unplugged?), skipping cleanup of {drive_dest}"
-                            )
-                        else:
-                            warn(
-                                f"Could not remove partial file {drive_dest}: {unlink_err}"
-                            )
                     unreachable.append(
                         (latest_filename, f"could not place on drive: {e}")
                     )
                     continue
+                success(f"Moved to Ventoy drive: {latest_filename}")
+                # The staging copy is no longer needed; clean older staging
+                # builds only after placement has succeeded.
+                _cleanup_old_versions(dest, verified=verified)
                 try:
                     dest.unlink(missing_ok=True)
                 except OSError as e:
                     warn(f"Could not remove staging copy {dest.name}: {e}")
-                _cleanup_old_versions(drive_dest, ventoy_root)
+            else:
+                drive_dest = dest
+
+            downloaded.append(latest_filename)
+            # Metadata is committed only after the image is in its final place,
+            # so a failed placement can never describe a file that is not there.
+            _commit_iso_metadata(ventoy_root, drive_dest, outcome)
+            if clean:
+                _cleanup_old_versions(drive_dest, ventoy_root, verified=verified)
 
     return download_target_dir, downloaded, unreachable

@@ -1229,6 +1229,8 @@ class TestDownloadIso(unittest.TestCase):
             self.assertTrue(result)
             self.assertTrue(dest.exists())
             mock_verify.assert_called_once()
+            self.assertEqual(mock_verify.call_args.args[0].name, "test.iso.part")
+            self.assertEqual(mock_verify.call_args.kwargs["iso_filename"], "test.iso")
             _ok("Checksum verified after download")
 
     @patch("visync.verify.verify_from_config")
@@ -1256,6 +1258,54 @@ class TestDownloadIso(unittest.TestCase):
             self.assertFalse(result)
             self.assertFalse(dest.exists())
             _ok("File deleted after checksum failure")
+
+    @patch("visync.verify.verify_from_config", return_value=False)
+    @patch("visync.download.urllib.request.urlopen")
+    @patch("visync.download.urllib.request.Request")
+    def test_failed_verification_preserves_existing_drive_image(
+        self, mock_request: MagicMock, mock_urlopen: MagicMock, mock_verify: MagicMock
+    ):
+        head_resp = self._mock_head_response("500")
+        get_resp = self._mock_get_response(b"x" * 500, content_length="500")
+        mock_urlopen.side_effect = [head_resp, get_resp]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dest = Path(tmpdir) / "test.iso"
+            dest.write_bytes(b"previous working image")
+            result = download_iso(
+                "https://example.com/test.iso",
+                dest,
+                drive_root=Path(tmpdir),
+                distro_config={"checksum_url": "https://example.com/SHA256SUMS"},
+                checksums_config={"enabled": True},
+            )
+            self.assertFalse(result)
+            self.assertEqual(dest.read_bytes(), b"previous working image")
+            self.assertFalse(dest.with_suffix(".iso.part").exists())
+
+    @patch("visync.verify.verify_from_config", return_value=None)
+    @patch("visync.download.urllib.request.urlopen")
+    @patch("visync.download.urllib.request.Request")
+    def test_unverified_download_preserves_existing_drive_image(
+        self, mock_request: MagicMock, mock_urlopen: MagicMock, mock_verify: MagicMock
+    ):
+        head_resp = self._mock_head_response("500")
+        get_resp = self._mock_get_response(b"x" * 500, content_length="500")
+        mock_urlopen.side_effect = [head_resp, get_resp]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dest = Path(tmpdir) / "test.iso"
+            dest.write_bytes(b"previous working image")
+            result = download_iso(
+                "https://example.com/test.iso",
+                dest,
+                drive_root=Path(tmpdir),
+                distro_config={},
+                checksums_config={"enabled": True},
+            )
+            self.assertFalse(result)
+            self.assertEqual(dest.read_bytes(), b"previous working image")
+            self.assertFalse(dest.with_suffix(".iso.part").exists())
 
     @patch("visync.verify.verify_from_config")
     @patch("visync.download.urllib.request.urlopen")

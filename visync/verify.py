@@ -16,6 +16,7 @@ import tempfile
 import urllib.request
 from enum import StrEnum
 from pathlib import Path
+from typing import NamedTuple
 from urllib.request import urlopen
 
 from visync.finder import (
@@ -23,6 +24,7 @@ from visync.finder import (
     get_iso_volume_id,
     identify_distro,
     keyword_hit,
+    load_all_metadata,
 )
 from visync.net import install_safe_opener, require_https
 from visync.output import warn
@@ -56,6 +58,21 @@ def _status(result: bool | None) -> VerifyStatus:
     if result is False:
         return VerifyStatus.MISMATCH
     return VerifyStatus.NO_CONFIG
+
+
+class VerifyResult(NamedTuple):
+    """One row of a directory verification.
+
+    *upstream_source* is set when the ISO was checked against an upstream
+    digest (fetched live or recovered from persisted download evidence) and
+    names that source. It stays empty for a skipped file, so callers can tell
+    "matched upstream" apart from "no upstream checksum existed".
+    """
+
+    path: Path
+    distro: str
+    status: VerifyStatus
+    upstream_source: str = ""
 
 
 # ── Version comparison utilities ──────────────────────────────────
@@ -188,6 +205,56 @@ def extract_version_from_filename(filename: str) -> str:
             return token
     match = re.search(r"(\d+(?:\.\d+)+)", stem)
     return match.group(1) if match else ""
+
+
+def extract_arch_from_filename(filename: str) -> str:
+    """Return the architecture family named in *filename*, or "" if unnamed.
+
+    Families rather than raw tokens, because providers spell the same target
+    differently: Ubuntu says ``amd64`` where Fedora says ``x86_64``. Comparison
+    only needs to answer "different target?", not to round-trip the spelling.
+    """
+    match = _ARCH_TOKEN_RE.search(filename)
+    if not match:
+        return ""
+    token = match.group(0).lower().replace("-", "_")
+    if token in {"x86_64", "amd64", "x86", "i386", "i686"}:
+        return "x86_64"
+    if token in {"aarch64", "arm64"}:
+        return "aarch64"
+    return token
+
+
+# Fedora publishes a release and a build revision as "44-1.1" (release 44,
+# build 1.1). The release alone cannot tell 44-1.1 from 44-1.2, so a rebuild
+# looked current and was skipped.
+_FEDORA_BUILD_RE = re.compile(r"(?<![\d.])(\d+)-(\d+(?:\.\d+)+)")
+# Pop!_OS rebuilds keep the release in the name and bump a trailing build
+# number: pop-os_24.04_amd64_intel_25.iso.
+_POPOS_BUILD_RE = re.compile(
+    r"^pop-os_(\d+\.\d+)_[a-z0-9]+_[a-z0-9]+_(\d+)\.(?:iso|img)$", re.IGNORECASE
+)
+
+
+def extract_build_version(filename: str) -> str:
+    """Return a comparable version that keeps the build revision.
+
+    ``extract_version_from_filename`` is the display version: Fedora's ``44``
+    is what a person reads, but ``44-1.1`` vs ``44-1.2`` is what decides an
+    update. This function folds the revision into a dotted numeric form so
+    ``compare_versions`` and ``parse_version`` stay the single ordering rule.
+    Providers without a revision suffix fall back to the display version.
+    """
+    popos = _POPOS_BUILD_RE.match(filename)
+    if popos:
+        return f"{popos.group(1)}.{popos.group(2)}"
+
+    stem = re.sub(r"\.(iso|img)$", "", filename, flags=re.IGNORECASE)
+    fedora = _FEDORA_BUILD_RE.search(stem)
+    if fedora:
+        return f"{fedora.group(1)}.{fedora.group(2)}"
+
+    return extract_version_from_filename(filename)
 
 
 HASH_ALGOS = {
@@ -515,6 +582,8 @@ def verify_iso(
     signing_key_url: str | None = None,
     signing_key_fingerprint: str = "",
     precomputed_hash: str = "",
+    evidence: dict | None = None,
+    iso_filename: str | None = None,
 ) -> bool:
     """Fetch a checksum, optionally verify its GPG signature, then compare.
 
@@ -529,8 +598,12 @@ def verify_iso(
     ONLY when the hash was computed in the current session from the actual
     file (e.g., right after a download). Do NOT use cached/persisted hashes
     for explicit verification — see STRM-501.
+
+    When *evidence* is a dict, the resolved upstream digest is recorded in it
+    so the caller can persist where the expectation came from. The digest is
+    only recorded after the signature check (when configured) has passed.
     """
-    iso_name = iso_path.name
+    iso_name = iso_filename or iso_path.name
 
     try:
         content = _fetch(checksum_url)
@@ -542,6 +615,7 @@ def verify_iso(
     # separate concerns. Parrot's signed-hashes.txt is clearsigned but uses a
     # plain `hash  filename` layout with md5/sha256/sha512 sections, so gating
     # the signature check on "gpg_checksum" left it entirely unauthenticated.
+    signature = "unsigned"
     if signing_key_url:
         with tempfile.TemporaryDirectory() as tmpdir:
             signed = Path(tmpdir) / "CHECKSUM.asc"
@@ -550,6 +624,7 @@ def verify_iso(
                 signed, signing_key_url, signing_key_fingerprint
             ):
                 return False
+        signature = "gpg-verified"
 
     parser = FORMAT_PARSERS.get(checksum_format)
     if not parser:
@@ -563,6 +638,12 @@ def verify_iso(
             f"no {algo} digest for {iso_name} in {checksum_url} — "
             f"cannot determine expected hash"
         )
+
+    if evidence is not None:
+        evidence["upstream_sha256"] = expected
+        evidence["upstream_source"] = checksum_url
+        evidence["upstream_algo"] = algo
+        evidence["signature"] = signature
 
     if precomputed_hash and algo == "sha256":
         local = precomputed_hash
@@ -746,13 +827,37 @@ def _cached_hash_for(iso_path: Path, cached: dict[str, dict]) -> str:
     return ""
 
 
-def run_directory_verify(
-    iso_dir: Path, config: dict
-) -> list[tuple[Path, str, VerifyStatus]]:
+def _verify_persisted_evidence(
+    iso_path: Path, meta: dict
+) -> tuple[VerifyStatus, str] | None:
+    """Check *iso_path* against the upstream digest saved with its download.
+
+    Returns None when the manifest carries no upstream digest (old metadata, or
+    the file was never verified upstream). The file is always re-hashed from
+    disk: the persisted digest is the *expectation*, never the local hash, so
+    same-size corruption is still caught (STRM-501).
+    """
+    expected = str(meta.get("upstream_sha256") or "")
+    if not expected:
+        return None
+    algo = str(meta.get("upstream_algo") or "sha256")
+    source = str(meta.get("upstream_source") or "persisted download evidence")
+    try:
+        local = compute_iso_hash(iso_path, algo)
+    except (OSError, ValueError):
+        return None
+    if local == expected.lower():
+        return VerifyStatus.VERIFIED, source
+    return VerifyStatus.MISMATCH, source
+
+
+def run_directory_verify(iso_dir: Path, config: dict) -> list[VerifyResult]:
     """Identify ISOs under *iso_dir* and verify each against config.
 
-    The third element is always a VerifyStatus; verify_from_config's tri-state
-    return is folded into it here, which is the one place that knows about both.
+    Verification prefers the live upstream checksum. When that path cannot be
+    used (source unreachable, or a provider such as Pop!_OS/Tails that exposes
+    no standalone checksum URL) the upstream digest persisted at download time
+    is used instead, and its source is reported alongside the result.
 
     Note: Explicit verification always re-hashes the ISO from disk. The
     precomputed_hash parameter is NOT used here to avoid the security issue
@@ -761,22 +866,32 @@ def run_directory_verify(
     distro_map = build_iso_distro_map(iso_dir)
     distro_configs = index_distro_configs(config)
     checksums_config = config.get("checksums", {})
-    results: list[tuple[Path, str, VerifyStatus]] = []
+    persisted = load_all_metadata(iso_dir)
+    results: list[VerifyResult] = []
     for iso_path, distro_name in distro_map.values():
         settings = resolve_distro_settings(distro_name, iso_path.name, distro_configs)
+        evidence: dict = {}
         try:
-            result = _status(
+            status = _status(
                 verify_from_config(
                     iso_path,
                     settings,
                     checksums_config,
                     precomputed_hash="",
+                    evidence=evidence,
                 )
             )
         except ChecksumUnavailable as e:
             warn(f"{iso_path.name} — {e}")
-            result = VerifyStatus.UNAVAILABLE
-        results.append((iso_path, distro_name, result))
+            status = VerifyStatus.UNAVAILABLE
+        source = str(evidence.get("upstream_source") or "")
+        if status in (VerifyStatus.UNAVAILABLE, VerifyStatus.NO_CONFIG):
+            recovered = _verify_persisted_evidence(
+                iso_path, persisted.get(iso_path.name, {})
+            )
+            if recovered is not None:
+                status, source = recovered
+        results.append(VerifyResult(iso_path, distro_name, status, source))
     return results
 
 
@@ -785,6 +900,8 @@ def verify_from_config(
     distro_config: dict,
     checksums_config: dict,
     precomputed_hash: str = "",
+    evidence: dict | None = None,
+    iso_filename: str | None = None,
 ) -> bool | None:
     """Verify a single ISO using its distro's checksum configuration.
 
@@ -795,6 +912,10 @@ def verify_from_config(
     hash was computed in the current session from the actual file (e.g.,
     right after a download). For explicit verification (run_directory_verify),
     pass an empty string to force re-hashing from disk — see STRM-501.
+
+    When *evidence* is a dict, the upstream digest and its source are recorded
+    in it (see ``verify_iso``), letting the caller persist provenance for the
+    installed artifact.
 
     There is deliberately no distro-name parameter: the caller has already
     resolved the name into *distro_config*, and download_iso passed an empty
@@ -809,13 +930,20 @@ def verify_from_config(
     if resolved:
         algo = distro_config.get("checksum_algo", "sha256")
         local = precomputed_hash or compute_iso_hash(iso_path, algo)
+        if evidence is not None:
+            evidence["upstream_sha256"] = resolved.lower()
+            evidence["upstream_source"] = str(
+                distro_config.get("resolved_checksum_source") or "scraper-resolved"
+            )
+            evidence["upstream_algo"] = algo
+            evidence["signature"] = "unsigned"
         return local == resolved
 
     checksum_url = distro_config.get("checksum_url")
     if not checksum_url:
         return None
 
-    iso_name = iso_path.name
+    iso_name = iso_filename or iso_path.name
     base_url = distro_config.get("base_url", "")
     checksum_url = expand_url(
         checksum_url,
@@ -832,9 +960,11 @@ def verify_from_config(
     return verify_iso(
         iso_path=iso_path,
         checksum_url=checksum_url,
+        iso_filename=iso_name,
         algo=algo,
         checksum_format=fmt,
         signing_key_url=key_url,
         signing_key_fingerprint=key_fingerprint,
         precomputed_hash=precomputed_hash,
+        evidence=evidence,
     )
