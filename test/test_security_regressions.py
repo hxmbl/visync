@@ -92,7 +92,7 @@ class TestDryRunGatesClean(unittest.TestCase):
     @patch("visync.download.visync_watchdog")
     @patch("visync.download._check_distro")
     def test_sync_clean_without_dry_run_removes_old(self, mock_check, _wd):
-        """--clean (no dry-run) removes only the older version."""
+        """A current filename alone does not authorize deleting rollback ISOs."""
         mock_check.return_value = self._current("archlinux-2026.08.01-x86_64.iso")
         with tempfile.TemporaryDirectory() as tmpdir:
             drive = self._make_drive(tmpdir)
@@ -104,7 +104,7 @@ class TestDryRunGatesClean(unittest.TestCase):
                     drive_override=drive,
                     use_buffer=False,
                 )
-            self.assertFalse((drive / "archlinux-2025.01.01-x86_64.iso").exists())
+            self.assertTrue((drive / "archlinux-2025.01.01-x86_64.iso").exists())
             self.assertTrue((drive / "archlinux-2026.08.01-x86_64.iso").exists())
 
     def test_sweep_keeps_higher_release_not_higher_build(self):
@@ -150,6 +150,24 @@ class TestDryRunGatesClean(unittest.TestCase):
             self.assertFalse(
                 staging.exists(), "dry-run must not create the staging dir"
             )
+
+    @patch("visync.download.visync_watchdog")
+    @patch("visync.download._check_distro")
+    def test_sync_clean_only_after_successful_download(self, mock_check, _wd):
+        """A sync with no verified replacement preserves old versions."""
+        mock_check.return_value = self._current("archlinux-2026.08.01-x86_64.iso")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            drive = self._make_drive(tmpdir)
+            with patch("visync.download.load_config", return_value=self._config()):
+                sync_all_configured_distros(
+                    dry_run=False,
+                    clean=True,
+                    only=["ArchLinux"],
+                    drive_override=drive,
+                    use_buffer=False,
+                )
+            self.assertTrue((drive / "archlinux-2025.01.01-x86_64.iso").exists())
+            self.assertTrue((drive / "archlinux-2026.08.01-x86_64.iso").exists())
 
 
 # ── C2: chunked downloader rejects truncated / range-ignoring servers ────────
@@ -2804,7 +2822,7 @@ class TestStrm501CachedHashBypass(unittest.TestCase):
 
         # After fix: should detect mismatch because actual_hash != expected_hash
         self.assertEqual(len(results), 1)
-        _iso_path, _distro, status = results[0]
+        _iso_path, _distro, status, _source = results[0]
         self.assertEqual(
             status,
             VerifyStatus.MISMATCH,

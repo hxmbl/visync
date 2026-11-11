@@ -13,6 +13,8 @@ from rich.markup import escape as _esc
 from visync.finder import (
     find_installed_isos,
     find_ventoy_drives,
+    get_config_error,
+    get_config_path,
     get_iso_volume_id,
     identify_distro,
     keyword_hit,
@@ -190,8 +192,9 @@ def _interruptible(fn):
         except KeyboardInterrupt:
             console.print()
             console.print(
-                "[red]✕ Interrupted.[/red] Partial downloads were removed; "
-                "nothing was changed on the drive."
+                "[red]✕ Interrupted.[/red] In-flight downloads were removed. "
+                "Files already placed on the drive were kept; existing images "
+                "were replaced only after verification."
             )
             raise typer.Exit(130) from None
 
@@ -1039,13 +1042,19 @@ def verify(
             continue
 
         any_results = True
-        for iso_path, distro, status in results:
+        for iso_path, distro, status, source in results:
             label = f"{iso_path.name} ({distro})"
             if status is VerifyStatus.VERIFIED:
-                success(label)
+                if source:
+                    success(f"{label} — matched upstream checksum from {source}")
+                else:
+                    success(label)
                 verified += 1
             elif status is VerifyStatus.MISMATCH:
-                error(f"{label} — checksum mismatch")
+                if source:
+                    error(f"{label} — checksum mismatch (upstream: {source})")
+                else:
+                    error(f"{label} — checksum mismatch")
                 failed += 1
             elif status is VerifyStatus.UNAVAILABLE:
                 error(f"{label} — checksum could not be obtained (not verified)")
@@ -1063,7 +1072,7 @@ def verify(
         summary += f", {unavailable} unverified (source unreachable)"
     summary += f", {skipped} skipped (no config)."
     if verified > 0:
-        summary += " (all checksums computed from disk)"
+        summary += " (files hashed from disk; upstream digests matched)"
     output_info(summary)
     if failed or unavailable:
         raise typer.Exit(1)
@@ -1160,6 +1169,38 @@ def nuke_metadata(
         with contextlib.suppress(OSError):
             metadata_dir.rmdir()
         output_info("Metadata will rebuild on next sync.")
+
+
+@app.command()
+def config(
+    config: Path | None = typer.Option(
+        None, "--config", "-c", help="Path to config file"
+    ),
+) -> None:
+    """Show which configuration file is used and whether it loaded.
+
+    Read-only: resolves and parses the catalogue, downloads nothing.
+    """
+    data = load_config(config)
+    effective = get_config_path()
+    failure = get_config_error()
+    if failure:
+        error(failure)
+        raise typer.Exit(1)
+    if effective is None:
+        error("No configuration file was loaded.")
+        raise typer.Exit(1)
+
+    success(f"Configuration: {effective}")
+    distros = data.get("distros", {})
+    output_info(f"{len(distros)} distribution(s) available")
+    checksums_enabled = data.get("checksums", {}).get("enabled", True)
+    output_info(
+        f"Checksum verification: {'enabled' if checksums_enabled else 'disabled'}"
+    )
+    if not distros:
+        error("The selected configuration defines no [distros] entries.")
+        raise typer.Exit(1)
 
 
 @app.command()

@@ -19,12 +19,28 @@ from rich.markup import escape as _escape
 from visync.output import console
 
 _CONFIG_CACHE: dict | None = None
+# Where the cached config came from, and why the last load failed. Kept beside
+# the memo so `visync config` can explain selection without reloading.
+_CONFIG_PATH: Path | None = None
+_CONFIG_ERROR: str | None = None
 
 
 def reset_config_cache() -> None:
     """Forget the cached config so the next load re-resolves from disk."""
-    global _CONFIG_CACHE
+    global _CONFIG_CACHE, _CONFIG_PATH, _CONFIG_ERROR
     _CONFIG_CACHE = None
+    _CONFIG_PATH = None
+    _CONFIG_ERROR = None
+
+
+def get_config_path() -> Path | None:
+    """Return the file the last successful load used, or None."""
+    return _CONFIG_PATH
+
+
+def get_config_error() -> str | None:
+    """Return why the last load failed, or None when it succeeded."""
+    return _CONFIG_ERROR
 
 
 def _packaged_config() -> Path:
@@ -75,43 +91,64 @@ def load_config(config_path: Path | None = None) -> dict:
     With no explicit path, resolves in a fixed order (env, user, packaged,
     cwd-last) and caches the result so distro identification always agrees
     with the config the command loaded — including an explicit --config.
+
+    An explicitly selected config is never silently replaced by a fallback:
+    when VISYNC_CONFIG names a missing file, or --config points at one that is
+    unreadable or invalid, the load fails with a message naming that path and
+    returns ``{}.`` Callers must treat "no distros" as a failure to configure,
+    not as an empty catalogue.
     """
-    global _CONFIG_CACHE
+    global _CONFIG_CACHE, _CONFIG_PATH, _CONFIG_ERROR
     if config_path is None:
         if _CONFIG_CACHE is not None:
             return _CONFIG_CACHE
-        for candidate in _config_candidates():
-            if candidate.is_file():
-                config_path = candidate
-                break
-        else:
-            # No candidate existed. Report where we looked rather than falling
-            # through to a bare cwd path, which used to surface as the
-            # misleading "Failed to parse config.toml: ... No such file".
-            searched = ", ".join(str(c) for c in _config_candidates())
-            if os.environ.get("VISYNC_CONFIG"):
-                console.print(
-                    "  [yellow]⚠[/yellow] VISYNC_CONFIG is set but the file does "
-                    "not exist."
+        env_path = os.environ.get("VISYNC_CONFIG")
+        if env_path:
+            # Explicit selection outranks every fallback: using the packaged
+            # catalogue here would hide a typo'd path behind plausible output.
+            env_file = Path(env_path)
+            if not env_file.is_file():
+                _CONFIG_ERROR = (
+                    f"VISYNC_CONFIG points to {env_file}, which does not exist"
                 )
-            console.print(f"  [red]✗[/red] No config.toml found. Searched: {searched}")
-            console.print("  [dim]Set VISYNC_CONFIG or pass --config.[/dim]")
-            return {}
+                console.print(f"  [red]✗[/red] {_CONFIG_ERROR}")
+                console.print("  [dim]Set VISYNC_CONFIG to a readable file.[/dim]")
+                return {}
+            config_path = env_file
+        else:
+            for candidate in _config_candidates():
+                if candidate.is_file():
+                    config_path = candidate
+                    break
+            else:
+                # No candidate existed. Report where we looked rather than
+                # falling through to a bare cwd path, which used to surface as
+                # the misleading "Failed to parse config.toml: ... No such file".
+                searched = ", ".join(str(c) for c in _config_candidates())
+                _CONFIG_ERROR = f"No config.toml found. Searched: {searched}"
+                console.print(f"  [red]✗[/red] {_CONFIG_ERROR}")
+                console.print("  [dim]Set VISYNC_CONFIG or pass --config.[/dim]")
+                return {}
     try:
         with config_path.open("rb") as f:
             data = tomllib.load(f)
     except FileNotFoundError as e:
-        console.print(f"  [red]✗[/red] Config not found: {_escape(str(e))}")
+        _CONFIG_ERROR = f"Config not found: {e}"
+        console.print(f"  [red]✗[/red] {_escape(str(e))}")
         return {}
     except tomllib.TOMLDecodeError as e:
+        _CONFIG_ERROR = f"Invalid TOML in {config_path}: {e}"
         console.print(
             f"  [red]✗[/red] Invalid TOML in {config_path}: {_escape(str(e))}"
         )
         return {}
     except OSError as e:
+        _CONFIG_ERROR = f"Failed to read {config_path}: {e}"
         console.print(f"  [red]✗[/red] Failed to read config.toml: {_escape(str(e))}")
         return {}
     _CONFIG_CACHE = data
+    _CONFIG_PATH = config_path
+    _CONFIG_ERROR = None
     return data
 
 
@@ -464,8 +501,18 @@ def write_iso_metadata(
     version: str,
     sha256: str,
     size: int = 0,
+    upstream_sha256: str = "",
+    upstream_source: str = "",
+    upstream_algo: str = "",
+    signature: str = "",
 ) -> None:
-    """Write a JSON metadata manifest for a successfully synced ISO."""
+    """Write a JSON metadata manifest for a successfully synced ISO.
+
+    ``sha256`` is the local hash of this file. ``upstream_*`` records the
+    digest the provider published and where it was obtained, so standalone
+    verification can reuse that evidence after the download session ends. The
+    two are separate fields on purpose: a local hash is never upstream proof.
+    """
     metadata_dir = ensure_visync_dir(drive_root)
     meta_file = metadata_dir / f"{filename}.json"
     manifest = {
@@ -475,6 +522,12 @@ def write_iso_metadata(
         "size": size,
         "sync_timestamp": datetime.now(UTC).isoformat(),
     }
+    if upstream_sha256:
+        manifest["upstream_sha256"] = upstream_sha256.lower()
+        manifest["upstream_source"] = upstream_source
+        manifest["upstream_algo"] = upstream_algo or "sha256"
+    if signature:
+        manifest["signature"] = signature
     try:
         tmp_file = meta_file.with_suffix(".json.tmp")
         with tmp_file.open("w") as f:

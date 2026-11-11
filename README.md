@@ -73,6 +73,7 @@ visync verify
 | `visync list` | List ISOs on the drive |
 | `visync autodetect` | Register existing ISOs as installed |
 | `visync verify` | Verify checksums against upstream |
+| `visync config` [--config <path>] | Show the selected configuration and verification setting |
 | `visync info <name>` | Show distro details |
 
 ## Batch Install File
@@ -131,12 +132,13 @@ Signature checking is configured separately via `signing_key_url` + `signing_key
 4. **Compare** — version-aware comparison (semantic or date-based) against local ISOs
 5. **Download** — streaming downloads with staging buffer (less drive wear), falls back to direct if staging full. Use `--no-staging` / `--no-buffer` to skip the staging buffer and download directly to the Ventoy drive.
 6. **Verify** — optional checksum verification against published hashes
-7. **Clean** — `--clean` removes deprecated ISOs of the same distro variant (dry-run by default)
+7. **Clean** — `--clean` removes deprecated ISOs only after all requested updates complete and a replacement is verified; combine with `--dry-run` to preview
 8. **State** — tracks installed distros in `.visync/installed.json`
 
 ## Safety
 
-- `--clean` is dry-run by default, and `--dry-run` never modifies the drive — `sync --clean --dry-run` deletes nothing and does not touch `.visync/`
+- Old ISOs are retained by default. `--clean` removes deprecated versions only after the entire requested sync succeeds and a verified replacement is installed; `--dry-run` previews updates without modifying the drive
+- A failed sync, an unverified replacement, or a sync with no verified replacement never removes rollback images
 - `remove` and `nuke-metadata` show exactly what will be deleted and ask for confirmation (`--yes` skips)
 - Ambiguous distro queries are refused with candidate lists instead of acting on an arbitrary match
 - Distro matching uses whole-token keywords (`pop` does not match `popcorn.iso`)
