@@ -213,13 +213,18 @@ def extract_arch_from_filename(filename: str) -> str:
     Families rather than raw tokens, because providers spell the same target
     differently: Ubuntu says ``amd64`` where Fedora says ``x86_64``. Comparison
     only needs to answer "different target?", not to round-trip the spelling.
+
+    32-bit x86 (``i386``, ``i686``, bare ``x86``) is its own family, ``i686``:
+    a 32-bit image must never satisfy or replace a 64-bit one.
     """
     match = _ARCH_TOKEN_RE.search(filename)
     if not match:
         return ""
     token = match.group(0).lower().replace("-", "_")
-    if token in {"x86_64", "amd64", "x86", "i386", "i686"}:
+    if token in {"x86_64", "amd64"}:
         return "x86_64"
+    if token in {"x86", "i386", "i686"}:
+        return "i686"
     if token in {"aarch64", "arm64"}:
         return "aarch64"
     return token

@@ -90,6 +90,15 @@ class TestUpdateMatchingKeys(unittest.TestCase):
         self.assertEqual(extract_arch_from_filename("foo-arm64.iso"), "aarch64")
         self.assertEqual(extract_arch_from_filename("Zorin-OS-18-Core-64-bit.iso"), "")
 
+    def test_32_bit_x86_is_not_x86_64(self) -> None:
+        for name in ("foo-i386.iso", "foo-i686.iso", "foo-x86.iso"):
+            self.assertEqual(extract_arch_from_filename(name), "i686", name)
+            self.assertNotEqual(
+                extract_arch_from_filename(name),
+                extract_arch_from_filename("foo-x86_64.iso"),
+                name,
+            )
+
 
 class TestDistroUpdateMatching(unittest.TestCase):
     def _check(self, tmpdir: str, remote: str) -> DistroCheck:
@@ -630,6 +639,40 @@ class TestRollbackRetention(unittest.TestCase):
             mock_find.return_value = [new_iso, old_iso]
             _cleanup_old_versions(new_iso, drive, verified=True)
             self.assertFalse(old_iso.exists())
+
+    @patch("visync.download.identify_distro", return_value="Fedora")
+    @patch("visync.download.get_iso_volume_id", return_value="")
+    @patch("visync.download.find_installed_isos")
+    def test_other_architecture_is_kept(self, mock_find, _mock_vid, _mock_id) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            drive = Path(tmpdir)
+            new_iso = drive / "Fedora-Workstation-Live-aarch64-44-1.2.iso"
+            other = drive / "Fedora-Workstation-Live-x86_64-44-1.1.iso"
+            older = drive / "Fedora-Workstation-Live-aarch64-44-1.1.iso"
+            for p in (new_iso, other, older):
+                _write_iso(p, p.name.encode())
+            mock_find.return_value = [new_iso, other, older]
+            _cleanup_old_versions(new_iso, drive, verified=True)
+            self.assertTrue(
+                other.exists(), "x86_64 image must survive an aarch64 update"
+            )
+            self.assertFalse(older.exists(), "older aarch64 build is still removed")
+
+    @patch("visync.download.identify_distro", return_value="Ubuntu")
+    @patch("visync.download.get_iso_volume_id", return_value="")
+    def test_sweep_groups_by_architecture(self, _mock_vid, _mock_id) -> None:
+        from visync.download import _sweep_old_versions
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            drive = Path(tmpdir)
+            amd = drive / "ubuntu-26.04-desktop-amd64.iso"
+            arm = drive / "ubuntu-24.04-desktop-arm64.iso"
+            for p in (amd, arm):
+                _write_iso(p, p.name.encode())
+            with patch("visync.download.find_installed_isos", return_value=[amd, arm]):
+                _sweep_old_versions(drive, clean=True)
+            self.assertTrue(amd.exists())
+            self.assertTrue(arm.exists(), "only image of its architecture must stay")
 
 
 # ── STRM-505: configuration selection ────────────────────────────────────────

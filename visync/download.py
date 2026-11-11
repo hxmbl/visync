@@ -1245,6 +1245,11 @@ def _cleanup_old_versions(
         if new_distro in ("Unknown OS", ""):
             return
 
+        # Variant keys drop the architecture so a rebuild groups with its
+        # predecessor, which means the key alone would let an aarch64 download
+        # delete the x86_64 image of the same variant. Only an image of the
+        # same architecture (or both unnamed) is an older build of this one.
+        new_arch = extract_arch_from_filename(new_iso.name)
         target_dir = new_iso.parent
 
         for iso_path in find_installed_isos(target_dir):
@@ -1257,6 +1262,8 @@ def _cleanup_old_versions(
                 if not same_variant_prefix(
                     new_stem, _filename_variant_key(iso_path.name)
                 ):
+                    continue
+                if extract_arch_from_filename(iso_path.name) != new_arch:
                     continue
 
                 # Confirm match by reading volume ID only for candidates
@@ -1290,15 +1297,17 @@ def _cleanup_old_versions(
 def _sweep_old_versions(drive_root: Path, clean: bool = False) -> None:
     """Scan all ISOs on the drive and remove older versions of the same distro+variant.
 
-    Groups ISOs by (distro, variant_stem), sorts each group by version, and
-    removes all but the newest in each group.
+    Groups ISOs by (distro, variant_stem, architecture), sorts each group by
+    version, and removes all but the newest in each group. Architecture is part
+    of the group because variant stems drop it: without it the newest image of
+    one architecture would sweep away every other architecture's image.
     With clean=False (default), only reports what would be deleted.
     """
     from collections import defaultdict
 
     _debug("Running sweep for stale ISOs")
     all_isos = find_installed_isos(drive_root)
-    groups: dict[tuple[str, str], list[tuple[str, Path]]] = defaultdict(list)
+    groups: dict[tuple[str, str, str], list[tuple[str, Path]]] = defaultdict(list)
 
     for iso_path in all_isos:
         vid = get_iso_volume_id(iso_path)
@@ -1310,9 +1319,10 @@ def _sweep_old_versions(drive_root: Path, clean: bool = False) -> None:
             stem = _filename_variant_key(iso_path.name)
         version = extract_version_from_filename(iso_path.name) or "0"
         if distro and distro != "Unknown OS":
-            groups[(distro, stem)].append((version, iso_path))
+            arch = extract_arch_from_filename(iso_path.name)
+            groups[(distro, stem, arch)].append((version, iso_path))
 
-    for (distro, _stem), versions in groups.items():
+    for (distro, _stem, _arch), versions in groups.items():
         if len(versions) <= 1:
             continue
         versions.sort(key=lambda x: parse_version(x[0]) or ())
